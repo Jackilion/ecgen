@@ -1,0 +1,6 @@
+__pycache__/
+data/
+latent_spaces/
+outputs/
+*.png
+*.npy
