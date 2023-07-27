@@ -16,8 +16,9 @@ import tensorflow as tf
 from model.autoencoder import AutoEncoder
 import util.losses as losses
 import dataset_loader
-
+from util.learning_rate_scheduler import create_learning_rate_fn
 from absl import app, flags
+
 
 FLAGS = flags.FLAGS
 
@@ -91,7 +92,7 @@ def evaluate(ecgs, state, epoch, img_dir):
     plt.close()
 
 
-def create_train_state(rng):
+def create_train_state(rng, learning_rate_fn):
     model = AutoEncoder(
         block_depths=1,
         sample_rng = rng
@@ -99,9 +100,7 @@ def create_train_state(rng):
     rng_params, rng = jax.random.split(rng)
     dummy_ecg = jnp.ones((1, FLAGS.AE_ecg_length), dtype=jnp.float32)
     variables = model.init(rng_params, dummy_ecg, train=True)
-
-    tx = optax.adamw(learning_rate=FLAGS.AE_learning_rate,
-                     weight_decay=FLAGS.AE_weight_decay)
+    tx = optax.adamw(learning_rate=1e-4, weight_decay=FLAGS.AE_weight_decay)
 
     return TrainState.create(
         apply_fn=model.apply,
@@ -122,8 +121,8 @@ def compute_ema_params(ema_params, new_params):
 def copy_params_to_ema(state):
     return state.replace(params_ema = state.params)
 
-@jax.jit
-def train_step(state, batch):
+@partial(jax.jit, static_argnums=2)
+def train_step(state, batch, learning_rate_fn):
     def compute_loss(params):
         outputs, mutated_vars = state.apply_fn(
             {
@@ -134,10 +133,11 @@ def train_step(state, batch):
         )
         predicted_ecg, latent_space = outputs
         reconstruction_loss = losses.L1(predicted_ecg, batch).mean()
-        deterministic, mean, log_var = latent_space
-        regularisation_loss = losses.KLD(mean, log_var).mean()
-        total_loss = losses.vae_loss(reconstruction_loss, regularisation_loss, state.epoch)
-        return total_loss, (reconstruction_loss, regularisation_loss, mutated_vars)
+        #deterministic, mean, log_var = latent_space
+        #regularisation_loss = losses.KLD(mean, log_var).mean()
+        #total_loss = losses.vae_loss(reconstruction_loss, regularisation_loss, state.epoch)
+        total_loss = reconstruction_loss
+        return total_loss, (reconstruction_loss, -1, mutated_vars)
     grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
     (loss, aux), grads = grad_fn(state.params)
     reconstruction_loss, regularisation_loss, mutated_vars = aux
@@ -148,8 +148,8 @@ def train_step(state, batch):
     #     compute_ema_params, new_state.ema_params, new_state.params, new_state.ema_momentum
     # )
     # new_state = new_state.replace(ema_params=new_ema_params)
-    
-    return new_state, loss, reconstruction_loss, regularisation_loss
+    lr = learning_rate_fn(state.step)
+    return new_state, loss, lr
 
 
 def train() -> TrainState:
@@ -160,10 +160,14 @@ def train() -> TrainState:
 
     series_iter, label_iter = dataset_loader.load_ecg_dataset(dataset_rng, FLAGS.AE_ecg_length, FLAGS.AE_batch_size)
     state_rng, rng = jax.random.split(rng)
-    state = create_train_state(state_rng)
+    
+    learning_rate_fn = create_learning_rate_fn(2160)
+    state = create_train_state(state_rng, learning_rate_fn)
     
     ema_params = state.params.copy(add_or_replace={})
     state = state.replace(ema_params=ema_params)
+    
+    
 
     for epoch in range(FLAGS.AE_epochs):
         pbar = tqdm(range(len(series_iter)), desc=f"Epoch {epoch}")
@@ -173,12 +177,14 @@ def train() -> TrainState:
             #label_batch = label_iter[i]
 
             rng, train_step_rng = jax.random.split(rng)
-            state, loss, recon_loss, regu_loss = train_step(
+            state, loss, lr = train_step(
                 state=state,
-                batch=series_batch)
+                batch=series_batch,
+                learning_rate_fn=learning_rate_fn
+                )
             new_ema_params = jax.tree_map(compute_ema_params, state.ema_params, state.params)
             state = state.replace(ema_params = new_ema_params)
-            pbar.set_postfix({"Loss": f"{loss:.5f}", "L2": f"{recon_loss:.5f}", "KLD": f"{regu_loss:.5f}"})
+            pbar.set_postfix({"Loss": f"{loss:.5f}", "Lr": f"{lr:.5f}"})
 
         state = state.replace(epoch=epoch)
         evaluate(series_batch, state, epoch, FLAGS.AE_img_dir)

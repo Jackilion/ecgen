@@ -11,31 +11,38 @@ class Encoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool):
-        # Input shape is (B, 30_720, 1)
-        # Reshape it to (B, 256, 240)
+        # Input shape is (B, 2048, 1)
         B, C, L = x.shape
-        reshaped = jnp.reshape(x, (-1, 1024, 30))  # 1024 = 2seconds
-        # return ResnetBlock(8, 0, kernel_size=10)(x, train=train)
-        # return x
+        #reshaped = jnp.reshape(x, (-1, 1024, 30))  # 1024 = 2seconds
 
-        # Go down to (B, 64, 64)
-        down1 = DownBlock(128, block_depth=self.block_depth,
-                          return_skips=False)(reshaped, train=train)
-        resnet1 = ResnetBlock(128, kernel_size=8)(down1, train=train)
-        down2 = DownBlock(128, block_depth=self.block_depth,
-                          return_skips=False)(resnet1, train=train)
-        resnet2 = ResnetBlock(128, kernel_size=8)(down2, train=train)
+        # Go down to (B, 256, 1)
+        down1 = DownBlock(32, kernel_size=32, block_depth=self.block_depth, return_skips=False)(x, train=train) #(B, 1024, 32)
+        down2 = DownBlock(32, kernel_size=16, block_depth=self.block_depth, return_skips=False)(down1, train=train) #(B, 512, 32)
+        down3 = DownBlock(32, kernel_size=8, block_depth=self.block_depth, return_skips=False)(down2, train=train) #(B, 256, 32)
+        
+        resnet1 = nn.Conv(16, kernel_size=[8])(down3) #(B, 256, 16)
+        resnet2 = nn.Conv(8, kernel_size=[8])(resnet1) #(B, 256, 8)
+        output = nn.Conv(1, kernel_size=[1])(resnet2) #(B, 256, 1)
+        return output
+        down1 = DownBlock(32, block_depth=self.block_depth,
+                          return_skips=False)(x, train=train) #1024, 16
+        # resnet1 = ResnetBlock(16, kernel_size=8)(down1, train=train)
+        down2 = DownBlock(32, block_depth=self.block_depth,
+                          return_skips=False)(down1, train=train) #512, 16
+        # resnet2 = ResnetBlock(16, kernel_size=8)(down2, train=train)
 
-        down3 = DownBlock(128, kernel_size=8, block_depth=self.block_depth,
-                          return_skips=False)(resnet2, train=train)
-        down4 = DownBlock(128, kernel_size=8, block_depth=self.block_depth,
-                          return_skips=False)(down3, train=train)
-        # down5 = DownBlock(128, kernel_size=4, block_depth=self.block_depth,
-        #                   return_skips=False)(down4, train=train)
-        # Go down in feature dim only, to arrive at (B, 64, 64)
-        # resnet3 = ResnetBlock(64, kernel_size=4)(down5, train=train)
-        latent_space = ResnetBlock(64, kernel_size=4)(
-            down4, train=train)  # This is the latent space vector
+        down3 = DownBlock(32, kernel_size=8, block_depth=self.block_depth,
+                          return_skips=False)(down2, train=train) #256, 16
+
+        # resnet3 = ResnetBlock(16, kernel_size=8)(down3, train=train)
+        down4 = DownBlock(32, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down3, train=train) #128, 8
+        
+        # resnet4 = ResnetBlock(8, kernel_size=4)(down4, train=train)
+        down5 = DownBlock(16, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down4, train=train) # B, 64, 4
+        
+        resnet5 = ResnetBlock(4, kernel_size=4)(down5, train=train)
+        
+        latent_space = jnp.reshape(resnet5, (B, 256, 1)) # This is the latent space vector, B, 256
         
         #flattened = latent_space.reshape((B, -1))
         
@@ -58,27 +65,43 @@ class Decoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool):
-        # input shape is (B, 64, 64)
+        # input shape is (B, 256, 1)
         # Go up again
         # resnet0 = ResnetBlock(64, kernel_size=4)(x, train=train)
-        resnet1 = ResnetBlock(128, kernel_size=4)(x, train=train)
-        up1 = UpBlock(128, kernel_size=8,
-                      block_depth=self.block_depth)(resnet1, train=train)
-        resnet2 = ResnetBlock(128, kernel_size=8)(up1, train=train)
-        up2 = UpBlock(128, kernel_size=10, block_depth=self.block_depth)(
-            resnet2, train=train)
-        resnet3 = ResnetBlock(128, kernel_size=8)(up2, train=train)
-        up3 = UpBlock(128, kernel_size=10, block_depth=self.block_depth)(
-            resnet3, train=train)
-        up4 = UpBlock(128, kernel_size=10, block_depth=self.block_depth)(
-            up3, train=train)
-        # up5 = UpBlock(128, kernel_size=10, block_depth=self.block_depth)(
-        #     up4, train=train)
-        output = nn.Conv(30, kernel_size=[4],
-                         kernel_init=nn.initializers.zeros)(up4)
-        B, L, C = output.shape
-        reshaped = jnp.reshape(output, newshape=(B, L * C, 1))
-        return reshaped
+        
+        resnet1 = nn.Conv(8, kernel_size=[4])(x) #(B, 256, 8)
+        resnet2 = nn.Conv(16, kernel_size=[8])(resnet1) #(B, 256, 16)
+        
+        up1 = UpBlock(32, kernel_size=8, block_depth=self.block_depth)(resnet2, train=train) #(B, 512, 32)
+        up2 = UpBlock(32, kernel_size=16, block_depth=self.block_depth)(up1, train=train) #(B, 1024, 32)
+        up3 = UpBlock(32, kernel_size=32, block_depth=self.block_depth)(up2, train=train) #(B, 2048, 32)
+        output = nn.Conv(1, kernel_size=[1])(up3)
+        return output
+        
+        
+        B, L, C = x.shape
+        reshaped = jnp.reshape(x, (B, 64, 4))
+        up1 = UpBlock(8, kernel_size=4,
+                      block_depth=self.block_depth)(reshaped, train=train) #128, 4
+        resnet2 = ResnetBlock(8, kernel_size=4)(up1, train=train)
+        up2 = UpBlock(16, kernel_size=4, block_depth=self.block_depth)(
+            up1, train=train) #256, 16
+        resnet3 = ResnetBlock(16, kernel_size=8)(up2, train=train)
+        up3 = UpBlock(32, kernel_size=8, block_depth=self.block_depth)(
+            up2, train=train) #512, 16
+        resnet4 = ResnetBlock(16, kernel_size=8)(up3, train=train)
+        
+        
+        up4 = UpBlock(32, kernel_size=8, block_depth=self.block_depth)(
+            up3, train=train) #1024, 16
+        resnet5 = ResnetBlock(16, kernel_size=16)(up4, train=train)
+        up5 = UpBlock(32, kernel_size=16, block_depth=self.block_depth)(resnet5, train=train) #2048, 16
+        output = nn.Conv(1, kernel_size=[1])(up5)
+        # output = nn.Conv(30, kernel_size=[4],
+        #                  kernel_init=nn.initializers.zeros)(up4)
+        #B, L, C = output.shape
+        #reshaped = jnp.reshape(output, newshape=(B, L * C, 1))
+        return output
     
     
 def reparameterize(z_mean, z_log_var, rng):
@@ -89,7 +112,7 @@ def reparameterize(z_mean, z_log_var, rng):
 
 
 class AutoEncoder(nn.Module):
-    block_depths: int = 2
+    block_depths: int = 1
     sample_rng: jax.random.KeyArray = jax.random.PRNGKey(0)
 
     def setup(self):

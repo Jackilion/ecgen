@@ -15,7 +15,18 @@ def L1(predictions, targets):
 
 @jax.vmap
 def L2(predictions, targets):
-    return jnp.square(predictions - targets)
+    return jnp.square(jnp.subtract(predictions, targets))
+
+
+def AE_loss(predictions, targets, epoch):
+    l1 = L1(predictions, targets)
+    l2 = L2(predictions, targets)
+    sigmoided_l1 = (1 -  1 / (1 + jnp.exp(-1*(epoch - 5)))) * l1
+    sigmoided_l2 =  1 / (1 + jnp.exp(-1*(epoch - 5))) * l2
+    # sigmoided_l4 = 1 / (1 + jnp.exp(-1*(epoch - 15))) * l4
+    return sigmoided_l1 + sigmoided_l2
+    
+
 
 @jax.vmap
 def KLD(P, Q):
