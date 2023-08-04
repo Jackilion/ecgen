@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 
+import flax.linen as nn
 from absl import flags
 
 flags.DEFINE_float("AE_beta", 0.25, "A weight applied to the regulirasitation loss")
@@ -17,6 +18,12 @@ def L1(predictions, targets):
 def L2(predictions, targets):
     return jnp.square(jnp.subtract(predictions, targets))
 
+@jax.vmap
+def BCE(predictions, targets):
+    logits = nn.log_sigmoid(predictions)
+    return -jnp.sum(targets * logits + (1. - targets) * jnp.log(-jnp.expm1(logits)) )
+    # return -1* jnp.sum(predictions * jnp.log(targets+EPSILON))
+
 
 def AE_loss(predictions, targets, epoch):
     l1 = L1(predictions, targets)
@@ -26,7 +33,6 @@ def AE_loss(predictions, targets, epoch):
     # sigmoided_l4 = 1 / (1 + jnp.exp(-1*(epoch - 15))) * l4
     return sigmoided_l1 + sigmoided_l2
     
-
 
 @jax.vmap
 def KLD(P, Q):
@@ -51,4 +57,4 @@ def vae_loss(recon_loss, regu_loss, epoch):
     sigmoided = 1 / (1 + jnp.exp(-1*(epoch - 25))) * regu_loss
 
     #return recon_loss + jnp.heaviside(epoch - 10, 1.0) * sigmoided
-    return recon_loss + flags.FLAGS.AE_beta * sigmoided
+    return recon_loss + flags.FLAGS.AE_beta * regu_loss

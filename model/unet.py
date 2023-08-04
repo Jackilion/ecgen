@@ -11,6 +11,7 @@ class UNet(nn.Module):
     embedding_dims: int = 32
     feature_sizes: List[int] = field(default_factory= lambda: [96, 128, 160])
     block_depths: int = 2
+    attention_depths: int = 4
     
     @nn.compact
     def __call__(self, x, variance, train:bool=True):
@@ -19,26 +20,34 @@ class UNet(nn.Module):
         embedded_variance = jnp.repeat(embedded_variance, L, axis = 1)
         h = jnp.concatenate([x, embedded_variance], axis=-1)
         
-        #start with some convolutions
-        for i in range(5):
-            h = ResnetBlock(features=96, kernel_size= 20 - i)(h, train=train)
-            h = nn.swish(h)
+        #Input shape is B, 256, 60
+        
+        # #start with some convolutions
+        # for i in range(5):
+        #     h = ResnetBlock(features=96, kernel_size= 20 - i)(h, train=train)
+        #     h = nn.swish(h)
         
         #go down
         skips = []
-        for _, features in enumerate(self.feature_sizes[:-1]):
+        for index, features in enumerate(self.feature_sizes[:-1]):
             h, skip = DownBlock(features=features, block_depth=self.block_depths, return_skips=True)(h, train=train)
+            # if index > self.attention_depths:
+            #     h = nn.SelfAttention(num_heads=2)(h)
             skips.append(skip)
             
         for _ in range(self.block_depths):
             h = ResnetBlock(self.feature_sizes[-1])(h, train=train)
+            #h = nn.SelfAttention(num_heads=4)(h)
         
         #go up
-        for _, features in enumerate(reversed(self.feature_sizes[:-1])):
+        for index, features in enumerate(reversed(self.feature_sizes[:-1])):
             skip = skips.pop()
             h = UpBlock(features=features, block_depth=self.block_depths)(h, skip, train=train)
+            # if index < self.attention_depths and self.attention_depths < len(self.feature_sizes):
+            #     h = nn.SelfAttention(num_heads=2)(h)
+            
         
-        h = nn.Conv(64, kernel_size=[4], kernel_init=nn.initializers.zeros)(h)
+        h = nn.Conv(1, kernel_size=[1], kernel_init=nn.initializers.zeros)(h)
         #h = nn.sigmoid(h)
         
         return h

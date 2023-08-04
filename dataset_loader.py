@@ -1,7 +1,7 @@
 import numpy as onp
 import jax
 
-def load_ecg_dataset(rng, series_length, batch_size):
+def load_ecg_dataset(rng, series_length, batch_size, normalise=False):
     data = onp.load("data/ecgs_1024.npy")
     labels = onp.load("data/labels_1024.npy")
 
@@ -15,6 +15,11 @@ def load_ecg_dataset(rng, series_length, batch_size):
     # labels_repeat = 
 
     data_2d = onp.reshape(data, (P*M, S))
+    if normalise:
+        max_val = onp.max(data_2d)
+        min_val = onp.min(data_2d)
+        range_vals = max_val - min_val
+        data_2d = (data_2d + onp.abs(min_val)) / (max_val + onp.abs(min_val))
     shuffled_indices = jax.random.permutation(rng, data_2d.shape[0])
     randomized_data_2d = data_2d[shuffled_indices, :]
 

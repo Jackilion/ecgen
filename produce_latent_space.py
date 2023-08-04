@@ -8,7 +8,7 @@ from tqdm import tqdm
 from model.autoencoder import AutoEncoder
 from train_autoencoder import TrainState
 
-SERIES_LENGTH = 30_720
+SERIES_LENGTH = 2048
 BATCH_SIZE = 64
 
 def get_autoencoder(config, rng):
@@ -31,7 +31,7 @@ def get_autoencoder(config, rng):
         ema_momentum=config.ema_momentum
     )
     
-    return flax.training.checkpoints.restore_checkpoint(ckpt_dir=config.model_path, target=init_state, step=99)
+    return flax.training.checkpoints.restore_checkpoint(ckpt_dir=config.model_path, target=init_state, step=29)
     
 def produce_ls(dataset, autoencoder_state):
     """Calls the autoencoders encoder function with the given dataset and saves the dataset, labels and latent space
@@ -50,7 +50,7 @@ def produce_ls(dataset, autoencoder_state):
                 "batch_stats": autoencoder_state.batch_stats
             },
         batch,
-        method = AutoEncoder.encode                       
+        method = AutoEncoder.encode
         )
         latent_spaces.append(latent_space_batch)
     output = jnp.array(latent_spaces)

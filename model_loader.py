@@ -32,4 +32,4 @@ def get_autoencoder(rng) -> AETrainState:
         ema_momentum=FLAGS.AE_ema_momentum
     )
     
-    return flax.training.checkpoints.restore_checkpoint(ckpt_dir=FLAGS.AE_model_path, target=init_state, step=99)
+    return flax.training.checkpoints.restore_checkpoint(ckpt_dir=FLAGS.AE_model_path, target=init_state, step=29)

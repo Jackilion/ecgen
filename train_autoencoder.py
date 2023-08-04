@@ -25,14 +25,16 @@ FLAGS = flags.FLAGS
 
 #! Training hyperparameter
 flags.DEFINE_float("AE_learning_rate", 1e-4, "The autoencoders learning rate")
-flags.DEFINE_float("AE_weight_decay", 1e-4, "The autoencoders weight decay")
+flags.DEFINE_float("AE_weight_decay", 0.1, "The autoencoders weight decay")
 flags.DEFINE_float("AE_ema_momentum", 0.990, "The autoencoders EMA momentum")
-flags.DEFINE_integer("AE_epochs", 100, "The autoencoders training epochs")
+flags.DEFINE_integer("AE_epochs", 30, "The autoencoders training epochs")
+
 
 #! Others
 flags.DEFINE_integer("AE_batch_size", 64, "The autoencoders batch size")
 flags.DEFINE_integer("AE_run_seed", 0, "The seed used to generate JAX prng")
 flags.DEFINE_integer("AE_ecg_length", 30_720, "The length of a single ECG in samples")
+flags.DEFINE_bool("AE_normalise_data", True, "If true, normalises all ecg's to be between 0 and 1")
 
 #! Logging flags
 now = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -48,7 +50,7 @@ def main(argv):
     Path(f"{FLAGS.AE_img_dir}").mkdir(parents=True, exist_ok=True)
     Path(f"{FLAGS.AE_log_dir}").mkdir(parents=True, exist_ok=True)
     Path(f"{FLAGS.AE_ckpt_dir}").mkdir(parents=True, exist_ok=True)
-    
+
     train()
 
 
@@ -100,7 +102,7 @@ def create_train_state(rng, learning_rate_fn):
     rng_params, rng = jax.random.split(rng)
     dummy_ecg = jnp.ones((1, FLAGS.AE_ecg_length), dtype=jnp.float32)
     variables = model.init(rng_params, dummy_ecg, train=True)
-    tx = optax.adamw(learning_rate=1e-4, weight_decay=FLAGS.AE_weight_decay)
+    tx = optax.adamw(learning_rate=FLAGS.AE_learning_rate, weight_decay=FLAGS.AE_weight_decay)
 
     return TrainState.create(
         apply_fn=model.apply,
@@ -132,12 +134,16 @@ def train_step(state, batch, learning_rate_fn):
             batch, train=True, mutable=["batch_stats"]
         )
         predicted_ecg, latent_space = outputs
-        reconstruction_loss = losses.L1(predicted_ecg, batch).mean()
-        #deterministic, mean, log_var = latent_space
-        #regularisation_loss = losses.KLD(mean, log_var).mean()
-        #total_loss = losses.vae_loss(reconstruction_loss, regularisation_loss, state.epoch)
+        reconstruction_loss = (losses.L2(predicted_ecg, batch)).mean()
+        #reconstruction_loss =(losses.L2(predicted_ecg, batch)).mean()
+
+        #optax.cross
+        #! TODO: Normalise ecgs to be between 0 and 1 and use Binary Cross Entropy instead
+        #regularisation_loss = (losses.KLD(mean, log_var)).mean()
         total_loss = reconstruction_loss
-        return total_loss, (reconstruction_loss, -1, mutated_vars)
+        #total_loss = losses.vae_loss(reconstruction_loss, regularisation_loss, state.epoch)
+        #total_loss = reconstruction_loss
+        return total_loss, (reconstruction_loss,  regularisation_loss, mutated_vars)
     grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
     (loss, aux), grads = grad_fn(state.params)
     reconstruction_loss, regularisation_loss, mutated_vars = aux
@@ -148,8 +154,8 @@ def train_step(state, batch, learning_rate_fn):
     #     compute_ema_params, new_state.ema_params, new_state.params, new_state.ema_momentum
     # )
     # new_state = new_state.replace(ema_params=new_ema_params)
-    lr = learning_rate_fn(state.step)
-    return new_state, loss, lr
+    #lr = learning_rate_fn(state.step)
+    return new_state, loss, reconstruction_loss, -1
 
 
 def train() -> TrainState:
@@ -158,7 +164,7 @@ def train() -> TrainState:
     rng = jax.random.PRNGKey(FLAGS.AE_run_seed)
     dataset_rng, rng = jax.random.split(rng)
 
-    series_iter, label_iter = dataset_loader.load_ecg_dataset(dataset_rng, FLAGS.AE_ecg_length, FLAGS.AE_batch_size)
+    series_iter, label_iter = dataset_loader.load_ecg_dataset(dataset_rng, FLAGS.AE_ecg_length, FLAGS.AE_batch_size, normalise=FLAGS.AE_normalise_data)
     state_rng, rng = jax.random.split(rng)
     
     learning_rate_fn = create_learning_rate_fn(2160)
@@ -177,14 +183,14 @@ def train() -> TrainState:
             #label_batch = label_iter[i]
 
             rng, train_step_rng = jax.random.split(rng)
-            state, loss, lr = train_step(
+            state, loss, reconstructin_loss, regularisation_loss = train_step(
                 state=state,
                 batch=series_batch,
                 learning_rate_fn=learning_rate_fn
                 )
             new_ema_params = jax.tree_map(compute_ema_params, state.ema_params, state.params)
             state = state.replace(ema_params = new_ema_params)
-            pbar.set_postfix({"Loss": f"{loss:.5f}", "Lr": f"{lr:.5f}"})
+            pbar.set_postfix({"Loss": f"{loss:.5f}", "MSE": f"{reconstructin_loss:.5f}", "KLD": f"{regularisation_loss:.5f}"})
 
         state = state.replace(epoch=epoch)
         evaluate(series_batch, state, epoch, FLAGS.AE_img_dir)

@@ -21,8 +21,8 @@ class DiffusionModel(nn.Module):
     end_log_snr: float = -7.5
     schedule_type: str = "linear"
     
-    noise_mu: float = 0 #0.5
-    noise_sigma: float = 5 #0.05
+    noise_mu: float = 0.4 #0.5
+    noise_sigma: float = 0.5 #0.05
     
     
     def setup(self):
@@ -119,8 +119,8 @@ class DiffusionModel(nn.Module):
     def generate(self, rng):
         steps = FLAGS.DDIM_gen_diffusion_steps
         rng, noise_rng = jax.random.split(rng)
-        initial_noise = jax.random.normal(noise_rng, (64, 64, 64))
+        initial_noise = jax.random.normal(noise_rng, (32, 64*256, 1))
         initial_noise = self.noise_sigma * initial_noise + self.noise_mu
         
-        generated_batch = self.reverse_diffusion(initial_noise, steps, step_offset=0.1)
+        generated_batch = self.reverse_diffusion(initial_noise, steps, step_offset=0.0)
         return generated_batch
