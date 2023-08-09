@@ -71,9 +71,11 @@ class TrainState(train_state.TrainState):
 def evaluate(ecgs, state, epoch, img_dir):
     variables = {"params": state.ema_params, "batch_stats": state.batch_stats}
 
-    model_outputs, _ = state.apply_fn(variables, ecgs, train=False)
+    model_outputs, latent_space, _ = state.apply_fn(variables, ecgs, train=False)
 
     plot_ecg = ecgs[0]
+    plot_latent_space = latent_space[0]
+    plot_latent_space = plot_latent_space.reshape((-1))
     plot_output = model_outputs[0]
     plt.plot(plot_ecg)
     plt.savefig(f"{img_dir}/epoch_{epoch}_ecg.png")
@@ -83,14 +85,14 @@ def evaluate(ecgs, state, epoch, img_dir):
     plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_output.png")
     plt.close()
     plt.figure()
-    plt.plot(plot_output[0:5000])
-    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_output_zoom.png")
+    plt.plot(plot_latent_space)
+    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_latent_space.png")
     plt.close()
 
     plt.figure()
-    plt.plot(plot_output[0:5000])
-    plt.plot(plot_ecg[0:5000], alpha=0.5)
-    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_output_zoom_both.png")
+    plt.plot(plot_output)
+    plt.plot(plot_ecg, alpha=0.5)
+    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_output_both.png")
     plt.close()
 
 
@@ -133,20 +135,15 @@ def train_step(state, batch, learning_rate_fn):
             },
             batch, train=True, mutable=["batch_stats"]
         )
-        predicted_ecg, latent_space = outputs
+        predicted_ecg, latent_space, embedding_space_loss = outputs
         reconstruction_loss = (losses.L2(predicted_ecg, batch)).mean()
-        #reconstruction_loss =(losses.L2(predicted_ecg, batch)).mean()
 
-        #optax.cross
-        #! TODO: Normalise ecgs to be between 0 and 1 and use Binary Cross Entropy instead
-        #regularisation_loss = (losses.KLD(mean, log_var)).mean()
-        total_loss = reconstruction_loss
-        #total_loss = losses.vae_loss(reconstruction_loss, regularisation_loss, state.epoch)
-        #total_loss = reconstruction_loss
-        return total_loss, (reconstruction_loss,  regularisation_loss, mutated_vars)
+        total_loss = reconstruction_loss + embedding_space_loss
+
+        return total_loss, (reconstruction_loss,  embedding_space_loss, mutated_vars)
     grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
     (loss, aux), grads = grad_fn(state.params)
-    reconstruction_loss, regularisation_loss, mutated_vars = aux
+    reconstruction_loss, embedding_space_loss, mutated_vars = aux
     new_state = state.apply_gradients(
         grads=grads, batch_stats=mutated_vars['batch_stats'])
 
@@ -155,7 +152,7 @@ def train_step(state, batch, learning_rate_fn):
     # )
     # new_state = new_state.replace(ema_params=new_ema_params)
     #lr = learning_rate_fn(state.step)
-    return new_state, loss, reconstruction_loss, -1
+    return new_state, loss, reconstruction_loss, embedding_space_loss
 
 
 def train() -> TrainState:
@@ -190,7 +187,7 @@ def train() -> TrainState:
                 )
             new_ema_params = jax.tree_map(compute_ema_params, state.ema_params, state.params)
             state = state.replace(ema_params = new_ema_params)
-            pbar.set_postfix({"Loss": f"{loss:.5f}", "MSE": f"{reconstructin_loss:.5f}", "KLD": f"{regularisation_loss:.5f}"})
+            pbar.set_postfix({"Loss": f"{loss:.5f}", "REC_L": f"{reconstructin_loss:.5f}", "REG_L": f"{regularisation_loss:.5f}"})
 
         state = state.replace(epoch=epoch)
         evaluate(series_batch, state, epoch, FLAGS.AE_img_dir)

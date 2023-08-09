@@ -42,9 +42,10 @@ def produce_ls(dataset, autoencoder_state):
     """
     ecgs, labels = dataset
     latent_spaces = []
+    embedding_indices = []
     for i in tqdm(range(len(ecgs)), desc="Creating latent space from dataset"):
         batch = ecgs[i]
-        latent_space_batch = autoencoder_state.apply_fn(
+        latent_space_batch, embedding_indices_batch = autoencoder_state.apply_fn(
             {
                 "params": autoencoder_state.params,
                 "batch_stats": autoencoder_state.batch_stats
@@ -53,9 +54,11 @@ def produce_ls(dataset, autoencoder_state):
         method = AutoEncoder.encode
         )
         latent_spaces.append(latent_space_batch)
+        embedding_indices.append(embedding_indices_batch)
     output = jnp.array(latent_spaces)
+    output_indices = jnp.array(embedding_indices)
     
-    return output, ecgs, labels
+    return output, output_indices, ecgs, labels
 
     
 if __name__ == "__main__":
@@ -75,8 +78,10 @@ if __name__ == "__main__":
     data_rng, rng = jax.random.split(rng)
     dataset = dataset_loader.load_ecg_dataset(data_rng, SERIES_LENGTH, BATCH_SIZE)
     
-    latent_space, ecgs, labels = produce_ls(dataset, autoencoder_state)
-    
+    latent_space, embedding_indices, ecgs, labels = produce_ls(dataset, autoencoder_state)
+    print(f"Latent space shape: {latent_space.shape}")
+    print(f"Embedding indices shape: {embedding_indices.shape}")
     jnp.save("ecgs", ecgs)
     jnp.save("latent_space", latent_space)
     jnp.save("labels", labels)
+    jnp.save("embedding_indices", embedding_indices)
