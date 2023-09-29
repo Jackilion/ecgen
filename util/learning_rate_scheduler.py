@@ -31,3 +31,14 @@ def create_learning_rate_fn(steps_per_epoch):
       schedules=[warmup_fn, max_schedule, lowering_schedule],
       boundaries=[FLAGS.AE_warmup_epochs * steps_per_epoch, 2* FLAGS.AE_warmup_epochs * steps_per_epoch])
   return schedule_fn
+
+def create_annealing_learning_rate_fn(total_epochs, steps_per_epoch):
+  
+  main_schedule = optax.constant_schedule(FLAGS.DDIM_learning_rate)
+  lowering_schedule = optax.linear_schedule(init_value=FLAGS.DDIM_learning_rate, end_value=0.0,
+                                            transition_steps=10 * steps_per_epoch)
+  
+  schedule_fn = optax.join_schedules(schedules=[main_schedule, lowering_schedule],
+                                     boundaries=[(total_epochs - 20) * steps_per_epoch]
+                                     )
+  return schedule_fn

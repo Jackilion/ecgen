@@ -4,6 +4,7 @@ from model.autoencoder import AutoEncoder
 import jax.numpy as jnp
 import optax
 from train_autoencoder import TrainState as AETrainState
+from model.ddim import DiffusionModel
 
 from absl import flags
 

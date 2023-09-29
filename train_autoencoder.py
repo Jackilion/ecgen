@@ -67,7 +67,6 @@ class TrainState(train_state.TrainState):
 
 
 
-
 def evaluate(ecgs, state, epoch, img_dir):
     variables = {"params": state.ema_params, "batch_stats": state.batch_stats}
 
@@ -105,7 +104,8 @@ def create_train_state(rng, learning_rate_fn):
     dummy_ecg = jnp.ones((1, FLAGS.AE_ecg_length), dtype=jnp.float32)
     variables = model.init(rng_params, dummy_ecg, train=True)
     tx = optax.adamw(learning_rate=FLAGS.AE_learning_rate, weight_decay=FLAGS.AE_weight_decay)
-
+    param_count = sum(x.size for x in jax.tree_leaves(variables))
+    print(f"Autoencoder parameter count: f{param_count}")
     return TrainState.create(
         apply_fn=model.apply,
         params=variables["params"],

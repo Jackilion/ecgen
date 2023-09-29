@@ -1,8 +1,8 @@
 import numpy as onp
 import jax
 
-def load_ecg_dataset(rng, series_length, batch_size, normalise=False):
-    data = onp.load("data/ecgs_1024.npy")
+def load_ecg_dataset(rng, series_length, batch_size, normalise=False, dataset_path="data/ecgs_1024.npy"):
+    data = onp.load(dataset_path)
     labels = onp.load("data/labels_1024.npy")
 
     print(data.shape)

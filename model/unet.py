@@ -5,6 +5,8 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
+from model.attention import efficient_dot_product_attention
+
 from model.resnet_blocks import DownBlock, ResnetBlock, UpBlock
 
 class UNet(nn.Module):
@@ -16,38 +18,53 @@ class UNet(nn.Module):
     @nn.compact
     def __call__(self, x, variance, train:bool=True):
         B, L, C = x.shape
+        #Input shape is B, 5120, 8
         embedded_variance = SinEmbed(embedding_dims=self.embedding_dims)(variance)
-        embedded_variance = jnp.repeat(embedded_variance, L, axis = 1)
-        h = jnp.concatenate([x, embedded_variance], axis=-1)
+        #embedded_variance = jnp.repeat(embedded_variance, L, axis = 1)
         
-        #Input shape is B, 256, 60
-        
-        # #start with some convolutions
-        # for i in range(5):
-        #     h = ResnetBlock(features=96, kernel_size= 20 - i)(h, train=train)
-        #     h = nn.swish(h)
+        h = nn.Conv(32, kernel_size=[4])(x)
+
         
         #go down
         skips = []
         for index, features in enumerate(self.feature_sizes[:-1]):
+            #Concat the variance to the input
+            B, L, C = h.shape
+            emb_var_repeated = jnp.repeat(embedded_variance, L, axis = 1)
+            h = jnp.concatenate([h, emb_var_repeated], axis=-1)
             h, skip = DownBlock(features=features, block_depth=self.block_depths, return_skips=True)(h, train=train)
-            # if index > self.attention_depths:
-            #     h = nn.SelfAttention(num_heads=2)(h)
-            skips.append(skip)
             
+            # if index > self.attention_depths:
+            skips.append(skip)
+        
         for _ in range(self.block_depths):
+            B, L, C = h.shape
+            emb_var_repeated = jnp.repeat(embedded_variance, L, axis = 1)
+            h = jnp.concatenate([h, emb_var_repeated], axis=-1)
+            
+            h = nn.SelfAttention(4)(h)
             h = ResnetBlock(self.feature_sizes[-1])(h, train=train)
-            #h = nn.SelfAttention(num_heads=4)(h)
+            h = nn.SelfAttention(4)(h)
+            h = ResnetBlock(self.feature_sizes[-1] // 2)(h, train=train)
+            # h = ResnetBlock(self.feature_sizes[-1])(h, train=train)
+            # h = nn.SelfAttention(4)(h)
+
         
         #go up
         for index, features in enumerate(reversed(self.feature_sizes[:-1])):
             skip = skips.pop()
+            B, L, C = h.shape
+            emb_var_repeated = jnp.repeat(embedded_variance, L, axis = 1)
+            h = jnp.concatenate([h, emb_var_repeated], axis=-1)
             h = UpBlock(features=features, block_depth=self.block_depths)(h, skip, train=train)
             # if index < self.attention_depths and self.attention_depths < len(self.feature_sizes):
-            #     h = nn.SelfAttention(num_heads=2)(h)
+
+
+
             
         
-        h = nn.Conv(1, kernel_size=[1], kernel_init=nn.initializers.zeros)(h)
+        h = nn.Conv(8, kernel_size=[4], kernel_init=nn.initializers.zeros)(h)
+        #h = nn.sigmoid(h)
         #h = nn.sigmoid(h)
         
         return h

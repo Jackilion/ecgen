@@ -13,27 +13,7 @@ class Encoder(nn.Module):
     def __call__(self, x, train: bool):
         # Input shape is (B, 2048, 1)
         B, C, L = x.shape
-        #reshaped = jnp.reshape(x, (-1, 1024, 30))  # 1024 = 2seconds
 
-        # Go down to (B, 256, 1)
-        
-        # conv1 = nn.Conv(32, kernel_size= [33], padding="VALID")(x)
-        # down1 = nn.avg_pool(conv1, (2,), strides=(2,))
-        # conv2 = nn.Conv(32, kernel_size=[17], padding="VALID")(down1)
-        # down2 = nn.avg_pool(conv2, (2,), strides=(2,)) #B, 496, 32
-        # conv3 = nn.Conv(32, kernel_size=[9], padding="VALID")(down2) #B, 488, 32
-        # down3 = nn.avg_pool(conv3, (2,), strides=(2,)) #B, 244, 32
-        # dim1 = nn.Conv(1, kernel_size=[1])(down3) #B, 244, 1
-        # reshaped = jax.image.resize(dim1, (B, 256, 1), method="bilinear")
-        # sigmoided = nn.sigmoid(reshaped)
-        # return sigmoided
-        # down1 = nn.avg_pool(conv1, (4,), strides=(4,)) # B, 512, 32
-        # conv2 = nn.Conv(32, kernel_size=[16])(down1)
-        # down2 = nn.avg_pool(conv2, (2,), strides=(2,))
-        # conv3 = nn.Conv(32, kernel_size=[8])(down2)
-        # output = nn.Conv(1, kernel_size=[1])(conv3)
-        # sigmoided = nn.sigmoid(output)
-        # return sigmoided
                                                 
         down1 = DownBlock(32, kernel_size=32, block_depth=self.block_depth, return_skips=False)(x, train=train) #(B, 1024, 32)
         down2 = DownBlock(32, kernel_size=16, block_depth=self.block_depth, return_skips=False)(down1, train=train) #(B, 512, 32)
@@ -44,15 +24,10 @@ class Encoder(nn.Module):
         
         resnet1 = nn.Conv(16, kernel_size=[8])(down6) #(B, 32, 16)
         resnet2 = nn.Conv(8, kernel_size=[8])(resnet1) #(B, 32, 8)
-        #output_conv = nn.Conv(1, kernel_size=[1])(resnet2) #(B, 256, 1)
-        #sigmoided = nn.sigmoid(output_conv)
+
         
         return resnet2
-        flattened = jnp.reshape(output_conv, (B, -1))
-        mean_ls = nn.Dense(256)(flattened)
-        logvar_ls = nn.Dense(256)(flattened)
-        
-        return mean_ls, logvar_ls  
+
 
 
 class Decoder(nn.Module):
@@ -83,7 +58,10 @@ class Quantizer(nn.Module):
     embed_dim_D: int
     commitment_loss_beta: float = 0.025
 
-    @nn.compact
+    def setup(self):
+        self.codebook = self.param('embedding_space', nn.initializers.variance_scaling(scale=1, mode="fan_avg", distribution="uniform"), (self.embed_size_K, self.embed_dim_D) )
+        
+    
     def __call__(self, z_e):
         """_summary_
 
@@ -94,7 +72,6 @@ class Quantizer(nn.Module):
             _type_: _description_
         """
         # Shape (K, D)
-        codebook = self.param('embedding_space', nn.initializers.variance_scaling(scale=1, mode="fan_avg", distribution="uniform"), (self.embed_size_K, self.embed_dim_D) )
         
         #print(f"codebook shape: {codebook.shape}")
         #print(f"z_e shape: {z_e.shape}")
@@ -120,13 +97,13 @@ class Quantizer(nn.Module):
         
         
         # shape 1 x K
-        codebook_sqr = jnp.sum(codebook**2, axis=-1, keepdims=True).T
+        codebook_sqr = jnp.sum(self.codebook**2, axis=-1, keepdims=True).T
         
         #print(f"codebook_sqr shape: {codebook_sqr.shape}")
         
         
         # shape N x K
-        distances = flattened_sqr - 2 * (flattened @ codebook.T) + codebook_sqr # (a-b)^2
+        distances = flattened_sqr - 2 * (flattened @ self.codebook.T) + codebook_sqr # (a-b)^2
         
         #print(f"distances shape: {distances.shape}")
         
@@ -138,7 +115,7 @@ class Quantizer(nn.Module):
 
         
         #shape A1 x ... x An x D
-        quantize = codebook[encoding_indices]
+        quantize = self.codebook[encoding_indices]
         
         #print(f"quantize shape: {quantize.shape}")
         
@@ -156,10 +133,10 @@ class Quantizer(nn.Module):
         return z_q, encoding_indices, loss
     
     def embed(self, indices):
-        codebook = self.param('embedding_space', nn.initializers.variance_scaling(distribution="uniform") )
+        #codebook = self.param('embedding_space', nn.initializers.variance_scaling(scale=1, mode="fan_avg", distribution="uniform"), (self.embed_size_K, self.embed_dim_D) )
         
         outshape = indices.shape + (self.embed_dim_D,)
-        x = codebook[indices].reshape(outshape)
+        x = self.codebook[indices].reshape(outshape)
         return x
                                     
         
@@ -195,6 +172,12 @@ class AutoEncoder(nn.Module):
         
         return z_q, encoding_indices
         
+    def embed_indices(self, indices):
+        return self.quantizer.embed(indices)
+    
+    def embed(self, vectors):
+        z_q, ind, loss = self.quantizer(vectors)
+        return z_q
     
     def decode(self, batch, train: bool = False):
         return self.decoder(batch, train=train)
