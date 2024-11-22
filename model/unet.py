@@ -63,7 +63,7 @@ class UNet(nn.Module):
 
             
         
-        h = nn.Conv(8, kernel_size=[4], kernel_init=nn.initializers.zeros)(h)
+        h = nn.Conv(16, kernel_size=[4], kernel_init=nn.initializers.zeros)(h)
         #h = nn.sigmoid(h)
         #h = nn.sigmoid(h)
         

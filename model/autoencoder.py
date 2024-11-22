@@ -5,28 +5,26 @@ import jax.numpy as jnp
 import flax.linen as nn
 from .resnet_blocks import ResnetBlock, DownBlock, UpBlock
 
+nonlinearity = nn.swish
 
 class Encoder(nn.Module):
     block_depth: int = 1
 
     @nn.compact
     def __call__(self, x, train: bool):
-        # Input shape is (B, 2048, 1)
+        # Input shape is (B, 2560, 1)
         B, C, L = x.shape
 
                                                 
-        down1 = DownBlock(32, kernel_size=32, block_depth=self.block_depth, return_skips=False)(x, train=train) #(B, 1024, 32)
-        down2 = DownBlock(32, kernel_size=16, block_depth=self.block_depth, return_skips=False)(down1, train=train) #(B, 512, 32)
-        down3 = DownBlock(32, kernel_size=8, block_depth=self.block_depth, return_skips=False)(down2, train=train) #(B, 256, 32)
-        down4 = DownBlock(32, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down3, train=train) #(B, 128, 32)
-        down5 = DownBlock(32, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down4, train=train) #(B, 64, 32)
-        down6 = DownBlock(32, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down5, train=train) #(B, 32, 32)
-        
-        resnet1 = nn.Conv(16, kernel_size=[8])(down6) #(B, 32, 16)
-        resnet2 = nn.Conv(8, kernel_size=[8])(resnet1) #(B, 32, 8)
-
-        
-        return resnet2
+        down1 = DownBlock(64, kernel_size=32, block_depth=self.block_depth, return_skips=False)(x, train=train) #(B, 1280, 64)
+        down2 = DownBlock(64, kernel_size=16, block_depth=self.block_depth, return_skips=False)(down1, train=train) #(B, 640, 64)
+        down3 = DownBlock(64, kernel_size=8, block_depth=self.block_depth, return_skips=False)(down2, train=train) #(B, 320, 64)
+        down4 = DownBlock(64, kernel_size=8, block_depth=self.block_depth, return_skips=False)(down3, train=train) #(B, 160, 64)
+        down5 = DownBlock(64, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down4, train=train) #(B, 80, 64)
+        down6 = DownBlock(64, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down5, train=train) #(B, 40, 64)
+        down7 = ResnetBlock(32, kernel_size=4)(down6, train=train) #(B, 40, 32)
+        down8 = ResnetBlock(16, kernel_size=2)(down7, train=train) #(B, 40, 16)
+        return down8
 
 
 
@@ -35,23 +33,17 @@ class Decoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool):
-        # input shape is (B, 32, 8)
-        # Go up again
-        # resnet0 = ResnetBlock(64, kernel_size=4)(x, train=train)
-        
-        #resnet1 = nn.Conv(8, kernel_size=[4])(x) #(B, 256, 8)
-        resnet2 = nn.Conv(16, kernel_size=[8])(x) #(B, 256, 16)
-        
-        up_2 = UpBlock(32, kernel_size=4, block_depth=self.block_depth)(resnet2, train=train) #(B, 64, 32)
-        up_1 = UpBlock(32, kernel_size=4, block_depth=self.block_depth)(up_2, train=train) #(B, 128, 32)
-
-        up0 = UpBlock(32, kernel_size=4, block_depth=self.block_depth)(up_1, train=train) #(B, 256, 32)
-        up1 = UpBlock(32, kernel_size=8, block_depth=self.block_depth)(up0, train=train) #(B, 512, 32)
-        up2 = UpBlock(32, kernel_size=16, block_depth=self.block_depth)(up1, train=train) #(B, 1024, 32)
-        up3 = UpBlock(32, kernel_size=32, block_depth=self.block_depth)(up2, train=train) #(B, 2048, 32)
-        output = nn.Conv(1, kernel_size=[1])(up3)
-        sigmoided = nn.sigmoid(output)
-        return sigmoided
+        # input shape is (B, 40, 16), output should be (B, 2560, 1)
+        B, L, C = x.shape  # seperate in Batch, length, and channels
+        up1 = UpBlock(32, block_depth=self.block_depth, upscale_factor=2)(x, train=train) #(B, 80, 32)
+        up2 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up1, train=train) #(B, 160, 64)
+        up3 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up2, train=train) #(B, 320, 64)
+        up4 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up3, train=train) #(B, 640, 64)
+        up5 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up4, train=train) #(B, 1280, 64)
+        up6 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up5, train=train) #(B, 2560, 64)
+        up7 = ResnetBlock(32, kernel_size=4)(up6, train=train) #(B, 2560, 32)
+        up8 = nn.Conv(1, kernel_size=(1,))(up7) #(B, 2560, 1)
+        return up8
 
 class Quantizer(nn.Module):
     embed_size_K: int
@@ -76,15 +68,6 @@ class Quantizer(nn.Module):
         #print(f"codebook shape: {codebook.shape}")
         #print(f"z_e shape: {z_e.shape}")
         
-        # ###
-        # flattened_z_e = z_e.reshape((-1, self.embed_dim_D))
-        # distances = (flattened_z_e - codebook) ** 2
-        # min_ind = jnp.argmin(distances)
-        # print(distances.shape)
-        # print(min_ind.shape)
-        # quit()
-        # ###
-        # return
         
         #print(f"z_e shape: {z_e.shape}")
         flattened = jnp.reshape(z_e, (-1, self.embed_dim_D))
@@ -142,11 +125,14 @@ class Quantizer(nn.Module):
         
 class AutoEncoder(nn.Module):
     block_depths: int = 1
-    sample_rng: jax.random.KeyArray = jax.random.PRNGKey(0)
+    embed_size_K: int = 64
+    embed_dim_D: int = 8
+    commitment_loss_beta: float = 0.25
+    #sample_rng = jax.random.PRNGKey(0)
 
     def setup(self):
         self.encoder = Encoder(block_depth=self.block_depths)
-        self.quantizer = Quantizer(embed_dim_D=8, embed_size_K=64)
+        self.quantizer = Quantizer(embed_dim_D=self.embed_dim_D, embed_size_K=self.embed_size_K, commitment_loss_beta=self.commitment_loss_beta)
         self.decoder = Decoder(block_depth=self.block_depths)
 
     def __call__(self, batch, train: bool = True):
@@ -162,7 +148,7 @@ class AutoEncoder(nn.Module):
         B, L, C = output.shape
         output = jnp.reshape(output, (B, L))
         #return output, (deterministic_ls, mean_ls, log_var_ls)
-        return output, z_q, embedding_space_loss
+        return output, z_e, embedding_space_loss
     def encode(self, batch, train: bool = False):
         B, L = batch.shape
         input_batch = jnp.reshape(batch, (B, L, 1))

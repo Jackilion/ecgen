@@ -111,7 +111,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     rng = jax.random.PRNGKey(args.seed)
-    autoencoder_state = get_autoencoder(args, rng)    
+    autoencoder_state = get_autoencoder(args, rng)
     data_rng, rng = jax.random.split(rng)
     #dataset = dataset_loader.load_ecg_dataset(data_rng, SERIES_LENGTH, BATCH_SIZE, normalise=True, dataset_path="data/ecgs_within_65_and_75_hr.npy")
     dataset = onp.load("data/ecgs_within_65_and_75_hr.npy")

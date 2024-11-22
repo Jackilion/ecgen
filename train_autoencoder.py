@@ -14,52 +14,16 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import tensorflow as tf
 from model.autoencoder import AutoEncoder
-import util.losses as losses
-import dataset_loader
 from util.learning_rate_scheduler import create_learning_rate_fn
-from absl import app, flags
-
-
-FLAGS = flags.FLAGS
-
-
-#! Training hyperparameter
-flags.DEFINE_float("AE_learning_rate", 1e-4, "The autoencoders learning rate")
-flags.DEFINE_float("AE_weight_decay", 0.1, "The autoencoders weight decay")
-flags.DEFINE_float("AE_ema_momentum", 0.990, "The autoencoders EMA momentum")
-flags.DEFINE_integer("AE_epochs", 30, "The autoencoders training epochs")
-
-
-#! Others
-flags.DEFINE_integer("AE_batch_size", 64, "The autoencoders batch size")
-flags.DEFINE_integer("AE_run_seed", 0, "The seed used to generate JAX prng")
-flags.DEFINE_integer("AE_ecg_length", 30_720, "The length of a single ECG in samples")
-flags.DEFINE_bool("AE_normalise_data", True, "If true, normalises all ecg's to be between 0 and 1")
-
-#! Logging flags
-now = datetime.now().strftime("%Y%m%d-%H%M%S")
-flags.DEFINE_string("AE_output_dir", f"./outputs/autoencoder/{now}", "The output root directory where all the models output will be saved")
-flags.DEFINE_string("AE_img_dir", f"./outputs/autoencoder/{now}/images", "The directory where evaluation images will be stored")
-flags.DEFINE_string("AE_log_dir", f"./outputs/autoencoder/{now}/logs", "The directory where logs will be stored")
-flags.DEFINE_string("AE_ckpt_dir", f"./outputs/autoencoder/{now}/checkpoints", "The directory where model checkpoints will be stored")
-
-
-
-def main(argv):
-    Path(FLAGS.AE_output_dir).mkdir(parents=True, exist_ok=True)
-    Path(f"{FLAGS.AE_img_dir}").mkdir(parents=True, exist_ok=True)
-    Path(f"{FLAGS.AE_log_dir}").mkdir(parents=True, exist_ok=True)
-    Path(f"{FLAGS.AE_ckpt_dir}").mkdir(parents=True, exist_ok=True)
-
-    train()
-
-
-# SERIES_LENGTH = 30_720  # Length of a single ECG in samples
-# BATCH_SIZE = 64
-
+import argparse
+import yaml
+from config.config import Config
+from util.data_loader import data_loader
+import seaborn as sns; sns.set()
 
 class TrainState(train_state.TrainState):
-    batch_stats: Any
+    #batch_stats: Any
+    dropout_rng: Any
     epoch: int = None
     ema_params: Any = None
     ema_momentum: float = None
@@ -68,84 +32,108 @@ class TrainState(train_state.TrainState):
 
 
 def evaluate(ecgs, state, epoch, img_dir):
-    variables = {"params": state.ema_params, "batch_stats": state.batch_stats}
+    variables = {"params": state.ema_params}
 
     model_outputs, latent_space, _ = state.apply_fn(variables, ecgs, train=False)
 
     plot_ecg = ecgs[0]
     plot_latent_space = latent_space[0]
-    plot_latent_space = plot_latent_space.reshape((-1))
     plot_output = model_outputs[0]
-    plt.plot(plot_ecg)
-    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg.png")
+    #plot 2 by 2 grid of ecgs
+    #plt.figure()#
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+    for i, ax in enumerate(axs.flat):
+        ax.plot(ecgs[i])
+        ax.plot(model_outputs[i])
+    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_grid.png")
+
     plt.close()
-    plt.figure()
-    plt.plot(plot_output)
-    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_output.png")
-    plt.close()
-    plt.figure()
-    plt.plot(plot_latent_space)
-    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_latent_space.png")
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+    plt.grid(False)
+    for i, ax in enumerate(axs.flat):
+        ax.imshow(latent_space[i].T, aspect="auto", cmap="viridis")
+    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_latent_space_grid_tokens.png")
     plt.close()
 
-    plt.figure()
-    plt.plot(plot_output)
-    plt.plot(plot_ecg, alpha=0.5)
-    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_output_both.png")
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+    for i, ax in enumerate(axs.flat):
+        ax.plot(latent_space[i].reshape((-1)))
+    plt.savefig(f"{img_dir}/epoch_{epoch}_ecg_latent_space_grid_flat.png")
     plt.close()
 
 
 def create_train_state(rng, learning_rate_fn):
+    config = Config().settings
     model = AutoEncoder(
-        block_depths=1,
-        sample_rng = rng
+        block_depths=config["AE_block_depths"],
+        embed_size_K=config["AE_embed_size_K"],
+        embed_dim_D=config["AE_embed_dim_D"],
+        commitment_loss_beta=config["AE_commitment_loss_beta"]
     )
     rng_params, rng = jax.random.split(rng)
-    dummy_ecg = jnp.ones((1, FLAGS.AE_ecg_length), dtype=jnp.float32)
-    variables = model.init(rng_params, dummy_ecg, train=True)
-    tx = optax.adamw(learning_rate=FLAGS.AE_learning_rate, weight_decay=FLAGS.AE_weight_decay)
+    rng_dropout, rng = jax.random.split(rng)
+    dummy_ecg = jnp.ones((16, config["AE_sample_length"]), dtype=jnp.float32)
+    variables = model.init(rng_params, dummy_ecg, train=False)
+    tx = optax.adamw(learning_rate=config["AE_learning_rate"], weight_decay=config["AE_weight_decay"])
+    #tx = optax.adam(learning_rate=config["learning_rate"])
     param_count = sum(x.size for x in jax.tree_leaves(variables))
-    print(f"Autoencoder parameter count: f{param_count}")
+    print(f"Autoencoder parameter count: {param_count}")
     return TrainState.create(
         apply_fn=model.apply,
         params=variables["params"],
         tx=tx,
         epoch = 0,
-        batch_stats=variables["batch_stats"],
+        dropout_rng = rng_dropout,
+        #batch_stats=variables["batch_stats"],
         ema_params=None,
-        ema_momentum=FLAGS.AE_ema_momentum
+        ema_momentum=config["AE_ema_momentum"]
     )
 
 
 def compute_ema_params(ema_params, new_params):
-    ema_momentum = FLAGS.AE_ema_momentum
+    config = Config().settings
+    ema_momentum = config["AE_ema_momentum"]
     return ema_momentum * ema_params + (1-ema_momentum)*new_params
     
 
 def copy_params_to_ema(state):
     return state.replace(params_ema = state.params)
 
+@jax.vmap
+def L2(prediction, targets):
+    return jnp.square(jnp.subtract(prediction, targets))
+
+@jax.vmap
+def L1(prediction, targets):
+    return jnp.abs(jnp.subtract(prediction, targets))
+
 @partial(jax.jit, static_argnums=2)
-def train_step(state, batch, learning_rate_fn):
+def train_step(state, batch, learning_rate_fn, dropout_key):
+    dropout_train_key = jax.random.fold_in(key=dropout_key, data=state.step)
     def compute_loss(params):
-        outputs, mutated_vars = state.apply_fn(
+        predicted_ecg, latent_space, embedding_space_loss = state.apply_fn(
             {
                 "params": params,
-                "batch_stats": state.batch_stats
+                #"batch_stats": state.batch_stats
             },
-            batch, train=True, mutable=["batch_stats"]
+            batch, train=True, rngs={'dropout': dropout_train_key} #, mutable=["batch_stats"],
+            
+        
         )
-        predicted_ecg, latent_space, embedding_space_loss = outputs
-        reconstruction_loss = (losses.L2(predicted_ecg, batch)).mean()
+        #predicted_ecg, latent_space, embedding_space_loss = outputs
+        reconstruction_loss = (L2(predicted_ecg, batch)).mean()
 
         total_loss = reconstruction_loss + embedding_space_loss
 
-        return total_loss, (reconstruction_loss,  embedding_space_loss, mutated_vars)
+        return total_loss, (reconstruction_loss,  embedding_space_loss)
     grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
     (loss, aux), grads = grad_fn(state.params)
-    reconstruction_loss, embedding_space_loss, mutated_vars = aux
+    reconstruction_loss, embedding_space_loss = aux
+    # new_state = state.apply_gradients(
+    #     grads=grads, batch_stats=mutated_vars['batch_stats'])
     new_state = state.apply_gradients(
-        grads=grads, batch_stats=mutated_vars['batch_stats'])
+        grads=grads
+    )
 
     # new_ema_params = jax.tree_map(
     #     compute_ema_params, new_state.ema_params, new_state.params, new_state.ema_momentum
@@ -157,42 +145,65 @@ def train_step(state, batch, learning_rate_fn):
 
 def train() -> TrainState:
     tf.config.experimental.set_visible_devices([], 'GPU')
-
-    rng = jax.random.PRNGKey(FLAGS.AE_run_seed)
-    dataset_rng, rng = jax.random.split(rng)
-
-    series_iter, label_iter = dataset_loader.load_ecg_dataset(dataset_rng, FLAGS.AE_ecg_length, FLAGS.AE_batch_size, normalise=FLAGS.AE_normalise_data)
-    state_rng, rng = jax.random.split(rng)
+    #FLAGS = Config().instance
+    config = Config().settings
     
-    learning_rate_fn = create_learning_rate_fn(2160)
+
+    #print(config)
+    rng = jax.random.PRNGKey(config["AE_jax_seed"])
+    #dataset_rng, rng = jax.random.split(rng)
+
+    #series_iter, label_iter = dataset_loader.load_ecg_dataset(dataset_rng, FLAGS.AE_signal_length, FLAGS.AE_batch_size, normalise=FLAGS.AE_normalise_data)
+
+    
+    state_rng, rng = jax.random.split(rng)
+    dropout_rng, rng = jax.random.split(rng)
+    
+    learning_rate_fn = create_learning_rate_fn(epochs=config["AE_epochs"], steps_per_epoch = 3500, base_learning_rate= config["AE_learning_rate"], max_learning_rate=config["AE_max_learning_rate"], warmup_epochs = config["AE_warmup_epochs"] )
     state = create_train_state(state_rng, learning_rate_fn)
     
-    ema_params = state.params.copy(add_or_replace={})
+    ema_params = state.params.copy()
     state = state.replace(ema_params=ema_params)
     
     
+    losses = []
 
-    for epoch in range(FLAGS.AE_epochs):
-        pbar = tqdm(range(len(series_iter)), desc=f"Epoch {epoch}")
 
-        for i in pbar:
-            series_batch = series_iter[i]
+    for epoch in range(config["AE_epochs"]):
+        pbar = tqdm(data_loader(config["AE_dataset_chunks"], config["AE_dataset_root"]) , desc=f"Epoch {epoch}")
+        for signal_batch in pbar:
+            #signal_batch = series_iter[i]
             #label_batch = label_iter[i]
-
+            # for i in range(len(signal_batch)):
+            #     plt.plot(signal_batch[i])
+            #     plt.savefig(f"log/images/lrelu/ecg_{i}.png")
+            #     plt.figure()
+            # quit()
             rng, train_step_rng = jax.random.split(rng)
             state, loss, reconstructin_loss, regularisation_loss = train_step(
                 state=state,
-                batch=series_batch,
-                learning_rate_fn=learning_rate_fn
+                batch=signal_batch,
+                learning_rate_fn=learning_rate_fn,
+                dropout_key=dropout_rng
                 )
             new_ema_params = jax.tree_map(compute_ema_params, state.ema_params, state.params)
             state = state.replace(ema_params = new_ema_params)
             pbar.set_postfix({"Loss": f"{loss:.5f}", "REC_L": f"{reconstructin_loss:.5f}", "REG_L": f"{regularisation_loss:.5f}"})
-
+            losses.append(loss)
         state = state.replace(epoch=epoch)
-        evaluate(series_batch, state, epoch, FLAGS.AE_img_dir)
-        checkpoints.save_checkpoint(ckpt_dir=FLAGS.AE_ckpt_dir, target=state, step=epoch)
+        evaluate(signal_batch, state, epoch, config["output_root_dir"] + config["image_dir"])
+        checkpoints.save_checkpoint(ckpt_dir=config["output_root_dir"] + config["checkpoint_dir"], target=state, step=epoch)
 
+    plt.plot(losses)
+    plt.savefig(config["output_root_dir"] + "loss.png")
+    plt.close()
+
+
+    
 
 if __name__ == '__main__':
-    app.run(main)
+    parser = argparse.ArgumentParser(description='VQ-VAE')
+    parser.add_argument('--config', type=str, default='config/ae_ecg_300ep_512hz.yml', help='Path to the config file')
+    args = parser.parse_args()
+    config = Config(f"{args.config}")
+    train()

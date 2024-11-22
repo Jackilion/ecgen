@@ -1,0 +1,28 @@
+#data
+AE_dataset_root: "/home/dominik.kranz/data/ecg/320s_512hz/"
+AE_sample_frequency: 512
+AE_sample_length: 2048 #Length of a single signal in samples, 1024 = 2s of 512 Hz
+AE_dataset_chunks: 30 #Number of chunks to take from the dataset (99 Chunks in total, about 3000 Patients)
+
+
+#training
+AE_learning_rate: 0.0004
+AE_max_learning_rate: 0.001
+AE_warmup_epochs: 10
+AE_weight_decay: 0.0001
+AE_ema_momentum: 0.99
+AE_epochs: 100
+AE_batch_size: 64 #! Not implemented yet
+AE_jax_seed: 42
+
+#model
+AE_convolution_filters: [32, 32, 32, 32, 32, 32]
+AE_convolution_kernels: [32, 16, 8, 4, 4, 4]
+AE_block_depths: 2
+AE_embed_dim_D: 16
+AE_embed_size_K: 1024
+AE_commitment_loss_beta: 1.0
+#output
+output_root_dir: "/home/dominik.kranz/ecgen/output/VQ-VAE/"
+checkpoint_dir: "checkpoints/"
+image_dir: "images/"

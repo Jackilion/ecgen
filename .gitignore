@@ -1,6 +1,6 @@
 __pycache__/
 data/
 latent_spaces/
-outputs/
+output/
 *.png
 *.npy

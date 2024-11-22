@@ -7,11 +7,9 @@ import jax.numpy as jnp
 from model.unet import UNet
 
 
-from absl import flags
 
-FLAGS = flags.FLAGS
 
-flags.DEFINE_integer("DDIM_gen_diffusion_steps", 29, "The amount of times the noise goes through the model during inference time")
+#flags.DEFINE_integer("DDIM_gen_diffusion_steps", 29, "The amount of times the noise goes through the model during inference time")
 
 
 class DiffusionModel(nn.Module):
@@ -21,8 +19,8 @@ class DiffusionModel(nn.Module):
     end_log_snr: float = -7.5
     schedule_type: str = "linear"
     
-    noise_mu: float = 0.0 #0.5
-    noise_sigma: float = 1.3 #0.05
+    noise_mu: float = 0.0
+    noise_sigma: float = 1.0
     
     
     def setup(self):
@@ -117,9 +115,9 @@ class DiffusionModel(nn.Module):
         return pred_batch
     
     def generate(self, rng, batch_size):
-        steps = FLAGS.DDIM_gen_diffusion_steps
+        steps = 29
         rng, noise_rng = jax.random.split(rng)
-        initial_noise = jax.random.normal(noise_rng, (batch_size, 16*64*5, 8))
+        initial_noise = jax.random.normal(noise_rng, (batch_size, 3200, 16))
         #initial_noise = jax.random.uniform(noise_rng, (batch_size, 16*64*5, 8))
         initial_noise = self.noise_sigma * initial_noise + self.noise_mu
         
@@ -127,6 +125,6 @@ class DiffusionModel(nn.Module):
         return generated_batch
     
     def generate_from_noise(self, noise, step_offset):
-        steps = FLAGS.DDIM_gen_diffusion_steps
+        steps = 29
         generated_batch = self.reverse_diffusion(noise, steps, step_offset=step_offset)
         return generated_batch

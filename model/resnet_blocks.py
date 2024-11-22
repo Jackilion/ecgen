@@ -2,24 +2,27 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-nonlinearity = nn.swish
+def nonlinearity(x):
+    return nn.swish(x)
+    #return nn.leaky_relu(x, negative_slope=0.1)
 
 
 class ResnetBlock(nn.Module):
     features: int = None
-    dropout: float = 0.0
+    dropout: float = 0.1
     kernel_size: int = 10
     # strides: tuple = (1,)
     # resample: Optional[str] = None
 
     @nn.compact
     def __call__(self, h_in, train: bool):
-        residual = nn.Conv(features=self.features, kernel_size=[1])(h_in)
-        h = nn.BatchNorm(use_running_average=not train,
-                         use_bias=False, use_scale=False)(h_in)
-        h = nn.Conv(features=self.features, kernel_size=[self.kernel_size])(h)
+        residual = nn.WeightNorm(nn.Conv(features=self.features, kernel_size=[1]))(h_in)
+        # h = nn.BatchNorm(use_running_average=not train,
+        #                  use_bias=False, use_scale=False)(h_in)
+        h = nn.WeightNorm(nn.Conv(features=self.features, kernel_size=[self.kernel_size]))(h_in)
+        h = nn.Dropout(rate=self.dropout)(h, deterministic=not train)
         h = nonlinearity(h)
-        h = nn.Conv(features=self.features, kernel_size=[self.kernel_size])(h)
+        h = nn.WeightNorm(nn.Conv(features=self.features, kernel_size=[self.kernel_size]))(h)
         return h + residual
 
 
