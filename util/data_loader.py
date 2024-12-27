@@ -4,6 +4,7 @@ import random
 import os
 import numpy
 import jax.numpy as jnp
+from tqdm import tqdm
 from config.config import Config
 
 #! TODO: Make it more memeory efficient, maybe send multiple chunks at once to the gpu. Right now this saves only about 15 A100 minutes compared to the segment by segment version
@@ -96,7 +97,36 @@ def load_tokenised_dataset(data_path):
         #    print(data[data.files[i]].shape)
         #    quit()
         #    yield data[data.files[i]]
-                
+             
+def load_afib_tokens(data_path):
+    latent_spaces = []
+    files = os.listdir(data_path)
+    #We need to sort the files so they match the labels
+    #They are named "latent_space_xxx", with x being increasing numbers
+    #Alphabetic sorting isn't enough, because "1000" comes before "120"
+    #first remove "labels.npy" and "test.py" from the list
+    files = [file for file in files if file.endswith(".npz")]
+    files.sort(key=lambda x: int(x.split("_")[2].split(".")[0]))
+    # print(files)
+    # quit()
+    for file in tqdm(files):
+        if not file.endswith(".npz"):
+            continue
+        space = numpy.load(data_path + file)
+        for i in range(len(space.files)):
+            latent_spaces.append(space[space.files[i]])
+            #print(space[space.files[i]])
+            #yield data[data.files[i]]
+
+    labels = numpy.load(data_path + "labels.npy")
+    labels = labels.reshape((-1,))
+
+    latent_spaces = numpy.stack(latent_spaces)
+    latent_spaces = latent_spaces.reshape((-1, 480, 16))
+    print(labels.shape)
+    print(latent_spaces.shape)
+    return latent_spaces, labels
+
 
 def load_afib_dataset(data_path):
     segments = numpy.load(data_path + "train_segments.npy")

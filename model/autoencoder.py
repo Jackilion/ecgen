@@ -9,41 +9,47 @@ nonlinearity = nn.swish
 
 class Encoder(nn.Module):
     block_depth: int = 1
-
+    convolution_filters: List[int] = field(default_factory=lambda: [64, 64, 64, 64, 64, 64])
+    kernel_sizes: List[int] = field(default_factory=lambda: [32, 16, 8, 4, 4, 4])
+    embed_dimension: int = 32
+    dropout: float = 0.1
+    
     @nn.compact
     def __call__(self, x, train: bool):
         # Input shape is (B, 2560, 1)
         B, C, L = x.shape
-
-                                                
-        down1 = DownBlock(64, kernel_size=32, block_depth=self.block_depth, return_skips=False)(x, train=train) #(B, 1280, 64)
-        down2 = DownBlock(64, kernel_size=16, block_depth=self.block_depth, return_skips=False)(down1, train=train) #(B, 640, 64)
-        down3 = DownBlock(64, kernel_size=8, block_depth=self.block_depth, return_skips=False)(down2, train=train) #(B, 320, 64)
-        down4 = DownBlock(64, kernel_size=8, block_depth=self.block_depth, return_skips=False)(down3, train=train) #(B, 160, 64)
-        down5 = DownBlock(64, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down4, train=train) #(B, 80, 64)
-        down6 = DownBlock(64, kernel_size=4, block_depth=self.block_depth, return_skips=False)(down5, train=train) #(B, 40, 64)
-        down7 = ResnetBlock(32, kernel_size=4)(down6, train=train) #(B, 40, 32)
-        down8 = ResnetBlock(16, kernel_size=2)(down7, train=train) #(B, 40, 16)
-        return down8
+        
+        for i in range(len(self.convolution_filters)):
+            x = DownBlock(self.convolution_filters[i], kernel_size=self.kernel_sizes[i], block_depth=self.block_depth, dropout=self.dropout, return_skips=False)(x, train=train)
+        
+        x = ResnetBlock(self.embed_dimension, dropout=self.dropout, kernel_size=4)(x, train=train)
+        x = ResnetBlock(self.embed_dimension, kernel_size=4, dropout=self.dropout)(x, train=train)                                
+        
+        return x
 
 
 
 class Decoder(nn.Module):
     block_depth: int = 1
-
+    convolution_filters: List[int] = field(default_factory=lambda: [64, 64, 64, 64, 64, 64])
+    kernel_sizes: List[int] = field(default_factory=lambda: [32, 16, 8, 4, 4, 4])
+    embed_dimension: int = 32
+    dropout: float = 0.1
+    
     @nn.compact
     def __call__(self, x, train: bool):
         # input shape is (B, 40, 16), output should be (B, 2560, 1)
         B, L, C = x.shape  # seperate in Batch, length, and channels
-        up1 = UpBlock(32, block_depth=self.block_depth, upscale_factor=2)(x, train=train) #(B, 80, 32)
-        up2 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up1, train=train) #(B, 160, 64)
-        up3 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up2, train=train) #(B, 320, 64)
-        up4 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up3, train=train) #(B, 640, 64)
-        up5 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up4, train=train) #(B, 1280, 64)
-        up6 = UpBlock(64, block_depth=self.block_depth, upscale_factor=2)(up5, train=train) #(B, 2560, 64)
-        up7 = ResnetBlock(32, kernel_size=4)(up6, train=train) #(B, 2560, 32)
-        up8 = nn.Conv(1, kernel_size=(1,))(up7) #(B, 2560, 1)
-        return up8
+        #
+    
+        #iterate backwards
+        for i in range(len(self.convolution_filters)-1, -1, -1):
+            x = UpBlock(self.convolution_filters[i], kernel_size=self.kernel_sizes[i], block_depth=self.block_depth, dropout=self.dropout)(x, train=train)
+        
+        x = nn.Conv(1, kernel_size=(1,))(x) # (B, 2560, 1)
+        
+        return x
+        
 
 class Quantizer(nn.Module):
     embed_size_K: int
@@ -128,14 +134,17 @@ class AutoEncoder(nn.Module):
     embed_size_K: int = 64
     embed_dim_D: int = 8
     commitment_loss_beta: float = 0.25
+    convolution_filters: List[int] = field(default_factory=lambda: [64, 64, 64, 64, 64, 64])
+    kernel_sizes: List[int] = field(default_factory=lambda: [32, 16, 8, 4, 4, 4])
+    dropout: float = 0.1
     #sample_rng = jax.random.PRNGKey(0)
 
     def setup(self):
-        self.encoder = Encoder(block_depth=self.block_depths)
+        self.encoder = Encoder(block_depth=self.block_depths, convolution_filters=self.convolution_filters, kernel_sizes=self.kernel_sizes, embed_dimension=self.embed_dim_D, dropout=self.dropout)
         self.quantizer = Quantizer(embed_dim_D=self.embed_dim_D, embed_size_K=self.embed_size_K, commitment_loss_beta=self.commitment_loss_beta)
-        self.decoder = Decoder(block_depth=self.block_depths)
+        self.decoder = Decoder(block_depth=self.block_depths, convolution_filters=self.convolution_filters, kernel_sizes=self.kernel_sizes, embed_dimension=self.embed_dim_D, dropout=self.dropout)
 
-    def __call__(self, batch, train: bool = True):
+    def __call__(self, batch, train: bool = True, return_encoding_indices=False):
         B, L = batch.shape
         input_batch = jnp.reshape(batch, (B, L, 1))
         #latent_space = self.encoder(input_batch, train=train)
@@ -148,6 +157,8 @@ class AutoEncoder(nn.Module):
         B, L, C = output.shape
         output = jnp.reshape(output, (B, L))
         #return output, (deterministic_ls, mean_ls, log_var_ls)
+        if return_encoding_indices:
+            return output, z_e, embedding_space_loss, encoding_indices
         return output, z_e, embedding_space_loss
     def encode(self, batch, train: bool = False):
         B, L = batch.shape
