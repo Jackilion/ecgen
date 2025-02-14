@@ -19,25 +19,28 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import tensorflow as tf
 from model.autoencoder import AutoEncoder
-from model.ddim import DiffusionModel
+from model.ddim_medium import DiffusionModelMedium as DiffusionModel
 # from model_loader import get_autoencoder
 from util.learning_rate_scheduler import create_learning_rate_fn
 import util.losses as losses
 import dataset_loader
 from pathlib import Path
 from train_autoencoder import TrainState as AutoEncoderTrainState
-from util.data_loader import load_tokenised_dataset
+from util.data_loader import load_ecgen_medium_dataset
 
 
 def get_autoencoder(rng):
     config = {
-        "AE_block_depths": 2,
+        "AE_block_depths": 1,
         "AE_embed_size_K": 1024,
         "AE_embed_dim_D": 16,
-        "AE_commitment_loss_beta": 1.0,
+        "AE_commitment_loss_beta": 0.8,
         "AE_learning_rate": 0.001,
+        "AE_convolution_filters": [32, 32, 32, 32, 32],
+        "AE_kernel_sizes": [32, 16, 8, 4, 4],
         "AE_weight_decay": 0.01,
         "AE_ema_momentum": 0.999,
+        "AE_dropout": 0.1,
         "output_root_dir": "/home/dominik.kranz/ecgen/output/VQ-VAE/",
         "checkpoint_dir": "checkpoints/",
 
@@ -46,15 +49,19 @@ def get_autoencoder(rng):
         block_depths=config["AE_block_depths"],
         embed_size_K=config["AE_embed_size_K"],
         embed_dim_D=config["AE_embed_dim_D"],
-        commitment_loss_beta=config["AE_commitment_loss_beta"]
+        commitment_loss_beta=config["AE_commitment_loss_beta"],
+        convolution_filters=config["AE_convolution_filters"],
+        kernel_sizes=config["AE_kernel_sizes"],
+        dropout=config["AE_dropout"]
         )
     rng_params, rng = jax.random.split(rng)
-    dummy_ecg = jnp.ones((64, 2048), dtype=jnp.float32)
+    dummy_ecg = jnp.ones((64, 5 * 512), dtype=jnp.float32)
     variables = model.init(rng_params, dummy_ecg, train=True)
 
     tx = optax.adamw(learning_rate=config["AE_learning_rate"],
                         weight_decay=config["AE_weight_decay"])
-    
+    param_count = sum(x.size for x in jax.tree_leaves(variables))
+    print(f"+ + + + + + + + VQ-VAE parameter count: {param_count:_} + + + + + + + + +")
     init_state = AutoEncoderTrainState.create(
         apply_fn=model.apply,
         params=variables["params"],
@@ -64,8 +71,8 @@ def get_autoencoder(rng):
         ema_params=None,
         ema_momentum=config["AE_ema_momentum"]
     )
-    path = config["output_root_dir"] + config["checkpoint_dir"]
-    return flax.training.checkpoints.restore_checkpoint(ckpt_dir=path, target=init_state, step=47)
+    path = config["output_root_dir"] + config["checkpoint_dir"] + "25/"
+    return flax.training.checkpoints.restore_checkpoint(ckpt_dir=path, target=init_state, step=25)
 
 
 def main():
@@ -102,8 +109,10 @@ def create_train_state(rng, learning_rate_fn):
     rng_init, rng_params = jax.random.split(rng)
 
     dummy_batch = jnp.ones((1, config["DDIM_batch_dims"][0], config["DDIM_batch_dims"][1]), dtype=jnp.float32)
-
     variables = model.init(rng_init, dummy_batch, rng_params, train=True)
+
+    param_count = sum(x.size for x in jax.tree_leaves(variables))
+    print(f"+ + + + + + + + ECGEN-Medium parameter count: {param_count:_} + + + + + + + + +")
 
     tx = optax.adamw(learning_rate=learning_rate_fn,
                      weight_decay=config["DDIM_weight_decay"])
@@ -114,11 +123,24 @@ def create_train_state(rng, learning_rate_fn):
         dropout_rng = rng,
         ema_params=variables["params"],
         ema_momentum=config["DDIM_ema_momentum"]
+  
+    )
+
+def compute_ema_params(ema_params, current_params, ema_momentum):
+    """
+    ema_params    : old EMA params (pytree)
+    current_params: newly updated model params (pytree)
+    ema_momentum  : float, e.g. 0.999
+    """
+    return jax.tree_map(
+        lambda e, c: ema_momentum * e + (1.0 - ema_momentum) * c,
+        ema_params,
+        current_params
     )
     
-def compute_ema_params(ema_params, current_params):
-    ema_momentum = config["DDIM_ema_momentum"]
-    return ema_momentum * ema_params + (1-ema_momentum) * current_params
+# def compute_ema_params(ema_params, current_params):
+#     ema_momentum = config["DDIM_ema_momentum"]
+#     return ema_momentum * ema_params + (1-ema_momentum) * current_params
 
 
 @partial(jax.jit, static_argnums=3)
@@ -161,6 +183,9 @@ def train_step(state, batch, rng, learning_rate_fn, dropout_rng):
     new_state = state.apply_gradients(
         grads=grads
     )
+    new_ema_params = compute_ema_params(state.ema_params, new_state.params, state.ema_momentum)
+    new_state = new_state.replace(ema_params=new_ema_params)
+    
     lr = learning_rate_fn(state.step)
     return new_state, loss, lr
 
@@ -177,10 +202,37 @@ def train() -> TrainState:
     autoencoder_state = get_autoencoder(rng)
 
     #dataset = load_tokenised_dataset(config["tokenised_dataset_root"])
+    #dataset = load_afib_tokens("/home/dominik.kranz/data/ecg/inhouse_afib_dataset/tokenized/")
+    #dataset = load_ecgen_medium_dataset("/home/dominik.kranz/data/ecg/ecgen_medium_dataset/")
+    
+
+
+    #shuffle latents and labels in the same way
+    # rng, shuffle_rng = jax.random.split(rng)
+    # indices = jax.random.permutation(shuffle_rng, len(latents))
+    # latents = latents[indices]
+    # labels = labels[indices]
+    #convert labels to int32
+
+    
+    
     for epoch in range(config["DDIM_epochs"]):
-        for i in load_tokenised_dataset(config["tokenised_dataset_root"]):
+        for batch in load_ecgen_medium_dataset("/home/dominik.kranz/data/ecg/ecgen_medium_dataset/"):
+            # print(batch.shape)
+            # quit()
+            # batch = i[0]
+            # print(type(i))
+            # print(type(batch))
+            # print(batch.shape)
+            
+            # quit()
+            # print(batch_labels.dtype)
+            # quit()
+            # print(batch.shape)
+            # print(batch_labels.shape)
+            # quit()
             # (64, 80, 32, 16)
-            batch = i.reshape(64, 80 * 32, 16) #(64 batches of tokens for 320s ECGs)
+            # batch = i.reshape(64, 80 * 32, 16) #(64 batches of tokens for 320s ECGs)
             rng, train_step_rng, dropout_rng = jax.random.split(rng, num=3)
             ddim_state, loss, lr = train_step(ddim_state, batch, train_step_rng, learning_rate_fn, dropout_rng)
         print(f"EPOCH {epoch} Loss: {loss}, Lr: {lr}")
@@ -188,116 +240,88 @@ def train() -> TrainState:
         ddim_state = ddim_state.replace(epoch=epoch)
         evaluate(batch, ddim_state, autoencoder_state, rng)
         checkpoints.save_checkpoint(ckpt_dir=f'{config["checkpoint_dir"]}{epoch}/', target=ddim_state, step=epoch)
-
-    quit()
-
-    rng, state_rng = jax.random.split(rng)
-    learning_rate_fn = create_annealing_learning_rate_fn(config["DDIM_epochs"], batched_dataset_test.shape[0])
-    ddim_state = create_train_state(state_rng, learning_rate_fn)
-    
-    rng, ae_rng = jax.random.split(rng)
-    ae_state = get_autoencoder(ae_rng)
-    
-    
-    for epoch in range(config.DDIM_epochs):
-        pbar = tqdm(range(len(batched_dataset)), desc=f'Epoch {epoch}')
-        for i in pbar:
-            
-            batch = batched_dataset[i]
-            rng, train_step_rng = jax.random.split(rng)
-            
-            ddim_state, loss, lr = train_step(ddim_state, batch, train_step_rng, learning_rate_fn)
-            pbar.set_postfix({"Loss": f"{loss:.5f}", "Lr": f"{lr:.5f}"})
-        ddim_state = ddim_state.replace(epoch=epoch)
-        rng, eval_rng = jax.random.split(rng)
-        evaluate(batch, ddim_state, ae_state, eval_rng)
-        checkpoints.save_checkpoint(ckpt_dir=config.checkpoint_dir, target=ddim_state, step=epoch)
-        
-    return ddim_state
+    print("Training finished")
   
 
 def evaluate(batch, ddim_state, ae_state, rng):
     config = Config().settings
-    print(f"Batch shape: {batch.shape}")
-    ddim_variables={"params": ddim_state.params}
+    # print(f"Batch shape: {batch.shape}")
+    ddim_variables={"params": ddim_state.ema_params}
     
     rng, gen_rng = jax.random.split(rng)
-    generated_batch = ddim_state.apply_fn(ddim_variables, gen_rng, 1, method=DiffusionModel.generate)
+    #2 labels, one 0 and one 1
+    # print(labels.shape)
+    generated_batch = ddim_state.apply_fn(ddim_variables, gen_rng, 2, method=DiffusionModel.generate)
     
-    print(f"generated_batch shape: {generated_batch.shape}")
+    # print(f"generated_batch shape: {generated_batch.shape}")
     data_size, data_length, _ = generated_batch.shape
     #generated_ints =jnp.rint(64*generated_batch)
     #generated_ints = jnp.array(generated_ints, dtype=jnp.int16)
     #batched = jnp.array_split(generated_batch[0], data_length // 256)
     #batched = jnp.array(batched)
-    batched = jnp.array_split(generated_batch[0], data_length // (32))
-    batched = jnp.array(batched)
-    batched = jnp.squeeze(batched)
+    # batched_0 = jnp.array_split(generated_batch[0], data_length // (80))
+    # batched_0 = jnp.array(batched_0)
+    # batched_0 = jnp.squeeze(batched_0)
     
-    print(f"Batched shape: {batched.shape}")
+    # batched_1 = jnp.array_split(generated_batch[1], data_length // (80))
+    # batched_1 = jnp.array(batched_1)
+    # batched_1 = jnp.squeeze(batched_1)
+    #print(f"Batched shape: {batched.shape}")
+    
+    batched_0 = generated_batch[0].reshape((-1, 80, 16))
+    batched_1 = generated_batch[1].reshape((-1, 80, 16))
+    
+    # print(f"Batched shape: {batched_0.shape}")
     ae_variables = {"params": ae_state.params}
     #print(generated_ints.shape)
     #print(generated_ints[0])
     #embed_vectors = ae_state.apply_fn(ae_variables, batched, method=AutoEncoder.embed_indices)
-    embedded = ae_state.apply_fn(ae_variables, batched, method=AutoEncoder.embed)
-    generated_ecg = ae_state.apply_fn(ae_variables, embedded, method= AutoEncoder.decode) #64, 2048
+    embedded_0 = ae_state.apply_fn(ae_variables, batched_0, method=AutoEncoder.embed)
+    generated_ecg_0 = ae_state.apply_fn(ae_variables, embedded_0, method= AutoEncoder.decode) #64, 2048
+    
+    embedded_1 = ae_state.apply_fn(ae_variables, batched_1, method=AutoEncoder.embed)
+    generated_ecg_1 = ae_state.apply_fn(ae_variables, embedded_1, method= AutoEncoder.decode) #64, 2048
     
     sample_batch = batch[0]
-    print(sample_batch.shape)
-    sample_batch = sample_batch.reshape((80, 32, 16))
+    # print(sample_batch.shape)
+    sample_batch = sample_batch.reshape((-1, 80, 16))
     #sample_batch_inted = jnp.rint(64*sample_batch)
     #sample_batch_inted = jnp.array(sample_batch_inted, dtype=jnp.int16)
     #batch_embedded = ae_state.apply_fn(ae_variables, sample_batch_inted, method=AutoEncoder.embed_indices)
     batch_decoded = ae_state.apply_fn(ae_variables, sample_batch, method= AutoEncoder.decode) #64, 2048
     #generated_2s_ecgs.append(generated_ecg)
-    print(f"generated_ecg shape: {generated_ecg.shape}")
+    # print(f"generated_ecg shape: {generated_ecg_0.shape}")
     # real_batch_diffused = ddim_state.apply_fn(ddim_variables, batch, 30, 0.7, method=DiffusionModel.reverse_diffusion)
     # plt.plot(real_batch_diffused[0].flatten())
     # plt.savefig(f"{FLAGS.DDIM_img_dir}/epoch_{ddim_state.epoch}_batch_diffused.png")
     # plt.close()
     
+    
     #Plot the latent space batch
-    x = onp.arange(0, len(batch[0].flatten()), step= 1)
-    plt.scatter(x, batch[0].flatten(), marker=".")
-    plt.title("Flattened latent space of a 320s ECG")
-    plt.xlabel("x")
-    plt.xlabel("y")
-    plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_batch.png")
-    plt.close()
-    
-    x = onp.arange(0, len(batch[0].flatten()[0:32*8*2]))
-    plt.scatter(x, batch[0].flatten()[0:32*8*2], marker=".")
-    plt.title("Flattened latent space of a 4s ECG")
+    #shape is (64, 1440, 16)
+    #plot one set of tokens as a heatmap
+    plt.figure(figsize=(20, 10))
+    plt.imshow(batch[0].T, aspect="auto")
+    plt.title("Latent space of a 90s ECG")
     plt.xlabel("x")
     plt.ylabel("y")
     plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_batch_zoom.png")
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_batch_heatmap.png")
     plt.close()
     
-    
-    x = onp.arange(0, len(embedded[0].flatten()))
-    plt.scatter(x, embedded[0].flatten(), marker=".")
-    plt.title("Flattened embedded latent space of a 2 ECG")
+    #plot the first 80 tokens (5 seconds)
+    plt.figure(figsize=(20, 10))
+    plt.imshow(batch[0][0:80].T, aspect="auto")
+    plt.title("First 5 seconds of latent space of a 30s ECG")
     plt.xlabel("x")
     plt.ylabel("y")
     plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_ddim_embedded.png")
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_batch_heatmap_zoom.png")
     plt.close()
-    
-    x = onp.arange(0, len(embedded[0].flatten()[0:256]))
-    plt.scatter(x, embedded[0].flatten()[0:256], marker=".")
-    plt.title("Flattened embedded latent space of a 4 ECG")
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_ddim_embedded_zoom.png")
-    plt.close()
-    
     
 
-    
     #Decode the latent space batch
+    plt.figure(figsize=(80, 10))
     plt.plot(batch_decoded.flatten())
     plt.xlabel("Samples")
     plt.ylabel("AU")
@@ -305,57 +329,89 @@ def evaluate(batch, ddim_state, ae_state, rng):
     plt.tight_layout()
     plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_batch_decoded.png")
     plt.close()
-    
-    plt.plot(batch_decoded.flatten()[0:8192])
-    plt.title("First 8 seconds of decoded latent space")
-    plt.xlabel("Samples")
-    plt.ylabel("AU")
-    plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_batch_decoded_zoom.png")
-    plt.close()
 
-    #Plot the DDIM output
-    
-    plt.plot(generated_batch[0].flatten())
-    plt.title("Flattened DDM output")
+
+    #Plot the DDIM output as a heatmap
+    plt.figure(figsize=(20, 10))
+    plt.imshow(generated_batch[0].T, aspect="auto")
+    plt.title("DDIM output for category 0")
     plt.xlabel("x")
     plt.ylabel("y")
     plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_ddim.png")
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_heatmap_0.png")
     plt.close()
     
-    #Plot the ECGs
-    plt.plot(generated_ecg.flatten())
-    plt.title("Decoded DDM output")
+    plt.figure(figsize=(20, 10))
+    plt.imshow(generated_batch[1].T, aspect="auto")
+    plt.title("DDIM output for category 1")
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.tight_layout()
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_heatmap_1.png")
+    plt.close()
+    
+    #Plot an category 0 and 1 ECG
+    plt.figure(figsize=(80, 10))
+    plt.plot(generated_ecg_0.flatten())
+    plt.title("Decoded DDM output sample 1")
     plt.xlabel("Samples")
     plt.ylabel("AU")
     plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}.png")
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_0.png")
+    plt.close()
+    
+    plt.figure(figsize=(80, 10))
+    plt.plot(generated_ecg_1.flatten())
+    plt.title("Decoded DDM output sample 2")
+    plt.xlabel("Samples")
+    plt.ylabel("AU")
+    plt.tight_layout()
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_1.png")
     plt.close()
     
     #zoom into start middle and end
-    plt.plot(generated_ecg.flatten()[0:8192])
+    plt.figure(figsize=(80, 30))
+    plt.subplot(3, 1, 1)
+    plt.plot(generated_ecg_0.flatten()[0:15360])
     plt.xlabel("Samples")
     plt.ylabel("AU")
-    plt.title("First 8 seconds of decoded DDM output")
+    plt.suptitle("First 30 seconds of decoded DDM output")
+    
+    plt.subplot(3, 1, 2)
+    plt.plot(generated_ecg_0.flatten()[15360:2*15360])
+    plt.xlabel("Samples")
+    plt.ylabel("AU")
+    plt.title("Middle 30 seconds of decoded DDM output")
+    
+    plt.subplot(3, 1, 3)
+    plt.plot(generated_ecg_0.flatten()[2*15360:])
+    plt.xlabel("Samples")
+    plt.ylabel("AU")
+    plt.title("Last 30 seconds of decoded DDM output")
     plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_zoom_start.png")
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_zoom_0.png")
     plt.close()
     
-    plt.plot(generated_ecg.flatten()[50000:58000])
+    plt.figure(figsize=(80, 30))
+    plt.subplot(3, 1, 1)
+    plt.plot(generated_ecg_1.flatten()[0:15360])
     plt.xlabel("Samples")
     plt.ylabel("AU")
-    plt.title("8 seconds of decoded DDM output")
-    plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_zoom_middle.png")
-    plt.close()
+    plt.suptitle("First 30 seconds of decoded DDM output")
     
-    plt.plot(generated_ecg.flatten()[120000:128000])
+    plt.subplot(3, 1, 2)
+    plt.plot(generated_ecg_1.flatten()[15360:2*15360])
     plt.xlabel("Samples")
     plt.ylabel("AU")
-    plt.title("Last 8 seconds of decoded DDM output")
+    plt.title("Middle 30 seconds of decoded DDM output")
+    
+    plt.subplot(3, 1, 3)
+    plt.plot(generated_ecg_1.flatten()[2*15360:])
+    plt.xlabel("Samples")
+    plt.ylabel("AU")
+    plt.title("Last 30 seconds of decoded DDM output")
     plt.tight_layout()
-    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_zoom_end.png")
+    plt.savefig(f"{config['image_dir']}/epoch_{ddim_state.epoch}_zoom_1.png")
     plt.close()
     
     # #random control noise
@@ -373,7 +429,7 @@ def evaluate(batch, ddim_state, ae_state, rng):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a DDIM model")
-    parser.add_argument('--config', type=str, default='config/diff_ecg_300ep_512hz.yml', help='Path to the config file')
+    parser.add_argument('--config', type=str, default='config/diff_med_ecg_300ep_512hz.yml', help='Path to the config file')
     args = parser.parse_args()
     config = Config(f"{args.config}")
     main()

@@ -4,7 +4,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from model.unet import UNet30s
+from model.unet import UNet320s as UNet
 
 
 
@@ -12,7 +12,7 @@ from model.unet import UNet30s
 #flags.DEFINE_integer("DDIM_gen_diffusion_steps", 29, "The amount of times the noise goes through the model during inference time")
 
 
-class DiffusionModelMid(nn.Module):
+class DiffusionModel(nn.Module):
     feature_sizes: List[int] = field(default_factory= lambda: [64, 96, 128])
     block_depths: int = 2
     start_log_snr: float = 2.5
@@ -24,9 +24,9 @@ class DiffusionModelMid(nn.Module):
     
     
     def setup(self):
-        self.network = UNet30s(feature_sizes=self.feature_sizes, block_depths=self.block_depths)
+        self.network = UNet(feature_sizes=self.feature_sizes, block_depths=self.block_depths)
         
-    def __call__(self, batch, labels, rng, train: bool):
+    def __call__(self, batch, rng, train: bool):
         B, L, C = batch.shape
         rng, t_rng = jax.random.split(rng)
         diffusion_times = jax.random.uniform(t_rng, (B, 1, 1))
@@ -39,7 +39,7 @@ class DiffusionModelMid(nn.Module):
         noisy_batch = signal_rates * batch + noise_rates * noises
         
         
-        pred_noises, pred_series = self.denoise(noisy_batch, labels, noise_rates, signal_rates, train=train)
+        pred_noises, pred_series = self.denoise(noisy_batch, noise_rates, signal_rates, train=train)
         
         return batch, noises, pred_noises, pred_series
         
@@ -80,15 +80,15 @@ class DiffusionModelMid(nn.Module):
         
         return noise_rates, signal_rates
     
-    def denoise(self, noisy_batch, labels, noise_rates, signal_rates, train: bool):
-        pred_batch = self.network(noisy_batch, labels, noise_rates**2,  train=train)
+    def denoise(self, noisy_batch, noise_rates, signal_rates, train: bool):
+        pred_batch = self.network(noisy_batch, noise_rates**2,  train=train)
         
         pred_noises = (noisy_batch-pred_batch*signal_rates)/noise_rates
         #pred_batch = (noisy_batch - noise_rates * pred_noises) / signal_rates
         
         return pred_noises,pred_batch
     
-    def reverse_diffusion(self, initial_noise, labels, steps, step_offset=0.0):
+    def reverse_diffusion(self, initial_noise, steps, step_offset=0.0):
         """Takes noise as an input and calls the model steps number of times, then returns the final result
 
         Args:
@@ -106,7 +106,7 @@ class DiffusionModelMid(nn.Module):
             diffusion_times = jnp.ones((num_tensors, 1, 1), dtype=initial_noise.dtype) - step * step_size - step_offset
             noise_rates, signal_rates = self.diffusion_schedule(diffusion_times)
             
-            pred_noises, pred_batch = self.denoise(noisy_batch, labels, noise_rates, signal_rates, train=False)
+            pred_noises, pred_batch = self.denoise(noisy_batch, noise_rates, signal_rates, train=False)
             
             next_diffusion_times = diffusion_times - step_size
             next_noise_rates, next_signal_rates = self.diffusion_schedule(next_diffusion_times)
@@ -114,19 +114,14 @@ class DiffusionModelMid(nn.Module):
             next_noisy_batch = (next_signal_rates * pred_batch + next_noise_rates * pred_noises)
         return pred_batch
     
-    def generate(self, rng, batch_size, labels = None):
+    def generate(self, rng, batch_size):
         steps = 29
         rng, noise_rng = jax.random.split(rng)
-        initial_noise = jax.random.normal(noise_rng, (batch_size, 480, 16))
+        initial_noise = jax.random.normal(noise_rng, (batch_size, 5120, 16))
         #initial_noise = jax.random.uniform(noise_rng, (batch_size, 16*64*5, 8))
         initial_noise = self.noise_sigma * initial_noise + self.noise_mu
         
-        if labels == None:
-            #half 0 half 1
-            labels = jax.random.bernoulli(rng, p=0.5, shape=(batch_size,))
-        
-
-        generated_batch = self.reverse_diffusion(initial_noise, labels, steps, step_offset=0.0)
+        generated_batch = self.reverse_diffusion(initial_noise, steps, step_offset=0.0)
         return generated_batch
     
     def generate_from_noise(self, noise, step_offset):

@@ -1,26 +1,26 @@
 checkpoint_period: 50
 output_period: 10 #Produces sample images every x epochs
 dataset_root: "/home/dominik.kranz/data/ecg/320s_512hz/"
-tokenised_dataset_root: "/home/dominik.kranz/data/ecg/tokenised/"
+tokenised_dataset_root: "/home/dominik.kranz/data/ecg/ecgen_large_dataset/npy/"
 
 
 #training
-DDIM_learning_rate: 0.0001
-DDIM_weight_decay: 0.001
+DDIM_learning_rate: 0.00005
+DDIM_weight_decay: 0.0001
 DDIM_ema_momentum: 0.99
 DDIM_epochs: 300
 DDIM_batch_size: 64
 DDIM_jax_seed: 42
 
 #model
-DDIM_convolution_filters: [128, 128, 128, 128, 128]
-DDIM_batch_dims: [3200, 16]
+DDIM_convolution_filters: [128, 128, 128, 128, 128, 128, 128]
+DDIM_batch_dims: [5120, 16]
 DDIM_block_depth: 2
 
 
 
 
 #output
-output_root_dir: "/home/dominik.kranz/ecgen/output/ddim/"
-checkpoint_dir: "/home/dominik.kranz/ecgen/output/ddim/checkpoints/"
-image_dir: "/home/dominik.kranz/ecgen/output/ddim/images/"
+output_root_dir: "/home/dominik.kranz/ecgen/output/ddim_large/"
+checkpoint_dir: "/home/dominik.kranz/data/checkpoints/ecgen/large/"
+image_dir: "/home/dominik.kranz/ecgen/output/ddim_large/images/"

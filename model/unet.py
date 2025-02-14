@@ -110,6 +110,66 @@ class UNet30s(nn.Module):
         #h = nn.sigmoid(h)
         
         return h
+    
+    
+class UNet90s(nn.Module):
+    embedding_dims: int = 16
+    feature_sizes: List[int] = field(default_factory= lambda: [96, 128, 160])
+    block_depths: int = 2
+    attention_depths: int = 4
+    
+    @nn.compact
+    def __call__(self, x, variance, train:bool=True):
+        B, L, C = x.shape
+        #Input shape is B, 1440, 16
+        embedded_variance = SinEmbed(embedding_dims=self.embedding_dims)(variance)
+        
+        h = nn.Conv(32, kernel_size=[6])(x)
+        
+
+        
+        #go down
+        skips = []
+        for index, features in enumerate(self.feature_sizes[:-1]):
+            #Concat the variance to the input
+            B, L, C = h.shape
+            emb_var_repeated = jnp.repeat(embedded_variance, L, axis = 1)
+            h = jnp.concatenate([h, emb_var_repeated], axis=-1)
+            
+            h, skip = DownBlock(features=features, block_depth=self.block_depths, return_skips=True)(h, train=train)
+            
+            # if index > self.attention_depths:
+            skips.append(skip)
+        
+        for _ in range(self.block_depths):
+            B, L, C = h.shape
+            emb_var_repeated = jnp.repeat(embedded_variance, L, axis = 1)
+            # emb_label_repetaed = jnp.repeat(embedded_label, L, axis = 1)
+            
+            h = jnp.concatenate([h, emb_var_repeated], axis=-1)
+            
+            h = nn.SelfAttention(4)(h)
+            h = ResnetBlock(self.feature_sizes[-1])(h, train=train)
+            h = nn.SelfAttention(4)(h)
+            h = ResnetBlock(self.feature_sizes[-1] // 2)(h, train=train)
+            # h = ResnetBlock(self.feature_sizes[-1])(h, train=train)
+            # h = nn.SelfAttention(4)(h)
+
+        
+        #go up
+        for index, features in enumerate(reversed(self.feature_sizes[:-1])):
+            skip = skips.pop()
+            B, L, C = h.shape
+            emb_var_repeated = jnp.repeat(embedded_variance, L, axis = 1)
+            # emb_label_repetaed = jnp.repeat(embedded_label, L, axis = 1)
+            h = jnp.concatenate([h, emb_var_repeated], axis=-1)
+            
+            h = UpBlock(features=features, block_depth=self.block_depths)(h, skip, train=train)
+            # if index < self.attention_depths and self.attention_depths < len(self.feature_sizes):
+            
+        h = nn.Conv(16, kernel_size=[4], kernel_init=nn.initializers.zeros)(h)
+        
+        return h
 
 class UNet320s(nn.Module):
     embedding_dims: int = 32

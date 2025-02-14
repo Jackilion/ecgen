@@ -7,11 +7,11 @@ from util.adaptive_filter import adaptive_hrv_filter
 from util.hrv_utils import TimeDomainParameters, FrequencyDomainParameters, calculate_time_domain_parameters
 import jax.numpy as jnp
 from scipy.signal import welch
-from train_ddim import TrainState as DDIMTrainState
+from ecgen.train_ddim_large import TrainState as DDIMTrainState
 import optax
 import flax
 from train_autoencoder import TrainState as AETrainState
-from model.ddim import DiffusionModel
+from ecgen.model.ddim_large import DiffusionModel
 from model.autoencoder import AutoEncoder
 from tqdm import tqdm
 from PIL import Image

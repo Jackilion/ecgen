@@ -85,18 +85,61 @@ def data_loader(num_batches: int, data_path: str) -> Iterator:
 
 
 def load_tokenised_dataset(data_path):
-    for file in os.listdir(data_path):
+    files = os.listdir(data_path)
+    subselection = []
+    for file in files:
         if not file.endswith(".npz"):
             continue
+        filename = int(file.split(".")[0])
+        if filename < 20:
+            subselection.append(file)
+    for file in subselection:
         data = numpy.load(data_path + file)
-        batch = data.files[0:64]
-        batch = jnp.array([data[batch[i]] for i in range(64)])
-        # print("Yielding batch")
-        yield batch
-        #for i in range(len(data.files)):
-        #    print(data[data.files[i]].shape)
-        #    quit()
-        #    yield data[data.files[i]]
+        array = data["array"]
+        #shuffle
+        random.shuffle(array)
+        array = jnp.array(array)
+        #split into batches of length 64, last one will be shorter
+        split_indices = list(range(64, array.shape[0], 64))
+        array = jnp.array_split(array, split_indices)
+                
+        # for i in array:
+        #     if i.shape != (64, 5120, 16):
+        #         print(i.shape)
+        # quit()
+        
+        #discard last batch if it is not full
+        for i in range(len(array) - 1):
+            yield array[i]
+        # break
+
+        
+def load_ecgen_medium_dataset(data_path):
+    for file in os.listdir(data_path + "npy/"):
+        if not file.endswith(".npz"):
+            continue
+        data = numpy.load(data_path + "npy/" + file)
+        array = data["array"]
+        #shuffle along first axis
+        random.shuffle(array)
+        
+        array = jnp.array(array)
+        #split into batches of length 64, last one will be shorter
+        split_indices = list(range(64, array.shape[0], 64))
+        array = jnp.array_split(array, split_indices)
+        # print(array[0].shape)
+                
+        # for i in array:
+        #     if i.shape != (64, 5120, 16):
+        #         print(i.shape)
+        # quit()
+        
+        #discard last batch if it is not full
+        for i in range(len(array) - 1):
+            yield array[i]
+        # break
+        
+
              
 def load_afib_tokens(data_path):
     latent_spaces = []
